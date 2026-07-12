@@ -15,6 +15,13 @@ repositories {
     }
 }
 
+// The contract is a moving SNAPSHOT, and Gradle caches changing modules for 24
+// hours by default. On a warm CI cache that means a contract merged and
+// published an hour ago is simply not seen: the build compiles against
+// yesterday's proto and fails on a message that demonstrably exists. It cost a
+// morning to find, because the artifact was right and the build was wrong.
+configurations.all { resolutionStrategy.cacheChangingModulesFor(0, "seconds") }
+
 dependencies {
     implementation(enforcedPlatform("io.quarkus.platform:quarkus-bom:3.30.8"))
     implementation("io.quarkus:quarkus-arc")
