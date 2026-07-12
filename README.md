@@ -1,10 +1,17 @@
 # service-match
 
-The central matchmaker. Players queue with `/queue <mode>` on their
-project's Velocity proxy; service-match forms MMR-based matches per
+The central matchmaker. It forms MMR-based matches per
 (project, mode, region), allocates an Agones GameServer in the target
-cluster, and routes the players there. Match results feed a durable
-rating store.
+cluster, and routes the matched players there. Match results feed a
+durable rating store.
+
+**How players actually reach the queue is not decided yet.** There is a
+`/queue <mode>` command on the Velocity proxy, but treat it as a test
+vehicle for driving the service end-to-end — not as the product surface.
+The service only ever sees an `Enqueue` call; whatever triggers it (a
+command, a lobby NPC, a UI, an automatic hook on join) is a decision for
+later and costs nothing to change, because it lives entirely above this
+API.
 
 ## The split that shapes everything
 
