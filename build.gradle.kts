@@ -22,6 +22,14 @@ dependencies {
     implementation("io.quarkus:quarkus-jdbc-postgresql")
     implementation("io.quarkus:quarkus-flyway")
     implementation("io.quarkus:quarkus-kotlin")
+    // Valkey (Redis wire protocol) — the queue spine. Every multi-key mutation
+    // runs as a Lua script, because Valkey executes those atomically: that
+    // serialisation is what makes double-booking a ticket impossible, without
+    // a leader election or a distributed lock.
+    implementation("io.quarkus:quarkus-redis-client")
+    // Queue ticks. The band widens with waiting time, so the matcher is
+    // inherently timer-driven — a purely event-driven loop could not widen.
+    implementation("io.quarkus:quarkus-scheduler")
     // JWT validation for incoming gRPC calls. SDK attaches the
     // projected ServiceAccount token (aud=grounds-services); the
     // interceptor reads + verifies it against k8s JWKS.
@@ -50,6 +58,15 @@ dependencies {
 }
 
 sourceSets { main { java { srcDirs("build/classes/java/quarkus-generated-sources/grpc") } } }
+
+tasks.test {
+    // Testcontainers' docker-java still negotiates API 1.32 by default, and a
+    // modern daemon refuses that outright ("client version 1.32 is too old.
+    // Minimum supported API version is 1.40"). docker-java takes the version
+    // from this system property. Inherit the caller's value where one is set,
+    // so CI can override.
+    systemProperty("api.version", System.getenv("DOCKER_API_VERSION") ?: "1.44")
+}
 
 tasks
     .matching { it.name == "kaptGenerateStubsKotlin" }
