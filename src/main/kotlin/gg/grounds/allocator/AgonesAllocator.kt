@@ -10,20 +10,26 @@ import org.eclipse.microprofile.config.inject.ConfigProperty
 import org.jboss.logging.Logger
 
 /**
- * Gets a GameServer for a match.
+ * Finds a server with room for one more match.
  *
- * The hard part is that `GameServerAllocation` is **not idempotent**. It is a create with no
- * idempotency key: every POST hands back a *different* server. A client timeout is therefore
- * ambiguous — the allocation may well have succeeded server-side, and simply retrying would strand
- * the first server and hand the players a second one.
+ * A Minestom runtime hosts **many matches at once**, each its own instance. So the usual Agones
+ * model — one GameServer per match, `Allocated` meaning "taken" — does not apply here. A server is
+ * never taken; it just has fewer free slots. Agones models that with **Counters**: the Fleet
+ * declares `matches: {count: 0, capacity: N}`, and an allocation asks for a server with room and
+ * increments the counter atomically.
  *
- * So before allocating, we look for a server already carrying this match's id (`adopt`). Agones'
- * MetadataPatch stamps that label at allocation time, which makes a successful-but-unacknowledged
- * POST *findable*. Combined with the lease in [AllocationWorker], that narrows the duplicate window
- * to the sliver where a POST lands server-side after our GET and before our lease expires.
+ * That atomic increment is what stops two matches being packed onto a server that can hold one
+ * more, and it is why we let Agones do the counting rather than tracking capacity ourselves.
  *
- * It does not close it. A client cannot un-ring that bell — hence the reaper. The design says
- * at-least-once with adopt-dedup, and means it.
+ * **Allocation is still not idempotent.** A POST that succeeds server-side but never reaches us
+ * leaves the counter one too high — a *leaked slot*, not a stranded server. That is a far milder
+ * failure than the old model's orphaned GameServer, and it self-heals: the gamemode owns its
+ * counter (Agones SDK) and sets it to the number of instances it is actually running, so a drifted
+ * count is corrected the next time the server syncs. The lease in [AllocationWorker] keeps such
+ * leaks rare in the first place.
+ *
+ * Decrementing is deliberately not done here. The server knows when one of its matches ends; we do
+ * not.
  */
 @ApplicationScoped
 class AgonesAllocator
@@ -34,8 +40,9 @@ constructor(
 ) {
 
     /**
-     * @return the server for this match, whether it was adopted or freshly allocated, or null if
-     *   the fleet had nothing ready.
+     * Claim a slot on a server for this match.
+     *
+     * @return the server, or null when every server in the fleet is full.
      */
     fun allocate(
         matchId: String,
@@ -43,13 +50,6 @@ constructor(
         fleetName: String,
         expectedPlayers: Int,
     ): ServerAssignment? {
-        adopt(matchId)?.let {
-            // A previous attempt already succeeded — we just never got to hear
-            // about it. Taking that server is the whole point of the label.
-            log.info("Adopted existing GameServer (match=$matchId, gs=${it.gameServerName})")
-            return it
-        }
-
         val body = allocationBody(matchId, modeId, fleetName, expectedPlayers)
         val result =
             kubernetes
@@ -61,11 +61,11 @@ constructor(
         @Suppress("UNCHECKED_CAST")
         val status = result.additionalProperties["status"] as? Map<String, Any?> ?: return null
 
-        // "UnAllocated" means the fleet had no Ready server — a real answer, not
-        // an error. The match goes back on the queue and tries again.
+        // "UnAllocated" means every server is at capacity — a real answer, not an
+        // error. The players go back on the queue and try again next tick.
         if (status["state"] != "Allocated") {
             log.warn(
-                "Fleet had nothing ready (match=$matchId, fleet=$fleetName, state=${status["state"]})"
+                "No server with a free slot (match=$matchId, fleet=$fleetName, state=${status["state"]})"
             )
             return null
         }
@@ -73,50 +73,18 @@ constructor(
         return status.toAssignment()
     }
 
-    /** A GameServer already labelled with this match id, if any. */
-    fun adopt(matchId: String): ServerAssignment? {
-        val existing =
+    /** Look up a server by name — used to re-derive an address after a crash. */
+    fun find(gameServerName: String): ServerAssignment? {
+        val gs =
             kubernetes
                 .genericKubernetesResources(GAMESERVER_CONTEXT)
                 .inNamespace(namespace)
-                .withLabel(MATCH_ID_LABEL, matchId)
-                .list()
-                .items
-                .firstOrNull() ?: return null
+                .withName(gameServerName)
+                .get() ?: return null
 
         @Suppress("UNCHECKED_CAST")
-        val status = existing.additionalProperties["status"] as? Map<String, Any?> ?: return null
-        return status.toAssignment(name = existing.metadata?.name)
-    }
-
-    /** Every GameServer stamped with a match id — the reaper's input. */
-    fun listMatchGameServers(): List<AllocatedGameServer> =
-        kubernetes
-            .genericKubernetesResources(GAMESERVER_CONTEXT)
-            .inNamespace(namespace)
-            .withLabel(MATCH_ID_LABEL)
-            .list()
-            .items
-            .mapNotNull { gs ->
-                val matchId = gs.metadata?.labels?.get(MATCH_ID_LABEL) ?: return@mapNotNull null
-                val name = gs.metadata?.name ?: return@mapNotNull null
-
-                @Suppress("UNCHECKED_CAST")
-                val status = gs.additionalProperties["status"] as? Map<String, Any?>
-                AllocatedGameServer(
-                    name = name,
-                    matchId = matchId,
-                    state = status?.get("state")?.toString() ?: "Unknown",
-                )
-            }
-
-    fun delete(gameServerName: String) {
-        kubernetes
-            .genericKubernetesResources(GAMESERVER_CONTEXT)
-            .inNamespace(namespace)
-            .withName(gameServerName)
-            .delete()
-        log.info("Deleted GameServer $gameServerName")
+        val status = gs.additionalProperties["status"] as? Map<String, Any?> ?: return null
+        return status.toAssignment(name = gs.metadata?.name)
     }
 
     private fun Map<String, Any?>.toAssignment(name: String? = null): ServerAssignment? {
@@ -129,6 +97,23 @@ constructor(
         return ServerAssignment(gsName, address, port)
     }
 
+    /**
+     * A Minestom runtime hosts *many* matches at once, so "allocate a server" is the wrong
+     * operation — a server is never taken, it just has fewer free slots. Agones models exactly this
+     * with Counters: the Fleet template declares `matches: {count: 0, capacity: N}`, and an
+     * allocation asks for a server with room and increments the counter atomically.
+     *
+     * The two selectors are ordered on purpose: prefer a server that is *already running matches*
+     * and still has room, and only take a fresh one when none has. That packs matches onto warm
+     * servers instead of spreading one match per server and idling the rest.
+     *
+     * `Allocated` therefore does not mean "occupied" here. It means "carrying at least one match" —
+     * which is why the reaper must never delete a server simply because one match disappeared, and
+     * why the gamemode must never call `ready()` when it happens to be empty for a moment.
+     *
+     * Agones can only *increment* through allocation. Decrementing is the server's job (Agones SDK)
+     * when one of its matches ends — it knows when that is; we do not.
+     */
     private fun allocationBody(
         matchId: String,
         modeId: String,
@@ -142,17 +127,33 @@ constructor(
                 mapOf(
                     "selectors" to
                         listOf(
+                            // Pack onto a server that is already running matches.
+                            mapOf(
+                                "matchLabels" to mapOf("agones.dev/fleet" to fleetName),
+                                "gameServerState" to "Allocated",
+                                "counters" to mapOf(MATCH_COUNTER to mapOf("minAvailable" to 1)),
+                            ),
+                            // Nothing warm has room — start using a fresh server.
                             mapOf(
                                 "matchLabels" to mapOf("agones.dev/fleet" to fleetName),
                                 "gameServerState" to "Ready",
-                            )
+                                "counters" to mapOf(MATCH_COUNTER to mapOf("minAvailable" to 1)),
+                            ),
                         ),
-                    // The label is what makes a lost-but-successful allocation
-                    // findable again. Without it, a timeout is unrecoverable.
+                    "counters" to
+                        mapOf(MATCH_COUNTER to mapOf("action" to "Increment", "amount" to 1)),
+                    // A server now carries several matches, so a single match-id
+                    // label cannot identify it. These are annotations for
+                    // operators looking at a server, not the dedup key they were
+                    // in the one-match-per-server design.
                     "metadata" to
                         mapOf(
-                            "labels" to mapOf(MATCH_ID_LABEL to matchId, GAME_MODE_LABEL to modeId),
-                            "annotations" to mapOf(EXPECTED_PLAYERS to expectedPlayers.toString()),
+                            "labels" to mapOf(GAME_MODE_LABEL to modeId),
+                            "annotations" to
+                                mapOf(
+                                    LAST_MATCH_ID to matchId,
+                                    EXPECTED_PLAYERS to expectedPlayers.toString(),
+                                ),
                         ),
                 )
         }
@@ -160,8 +161,21 @@ constructor(
     companion object {
         private val log: Logger = Logger.getLogger(AgonesAllocator::class.java)
 
-        const val MATCH_ID_LABEL = "grounds/match-id"
+        /**
+         * The Fleet template must declare this counter: `counters: {matches: {count: 0, capacity:
+         * N}}`. It is how Agones knows a server still has room, and it is the only thing that keeps
+         * two matches from being packed onto a server that can hold one.
+         */
+        const val MATCH_COUNTER = "matches"
+
         const val GAME_MODE_LABEL = "grounds/game-mode"
+
+        /**
+         * Informational. A server carries many matches now, so this is "the last match placed
+         * here", not a dedup key — the match's server is recorded in Valkey instead, which is what
+         * a retry consults.
+         */
+        const val LAST_MATCH_ID = "grounds/last-match-id"
         const val EXPECTED_PLAYERS = "grounds/expected-players"
 
         private val ALLOCATION_CONTEXT: ResourceDefinitionContext =
@@ -181,5 +195,3 @@ constructor(
                 .build()
     }
 }
-
-data class AllocatedGameServer(val name: String, val matchId: String, val state: String)

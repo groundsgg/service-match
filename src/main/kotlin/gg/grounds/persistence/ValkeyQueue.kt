@@ -92,7 +92,14 @@ class ValkeyQueue @Inject constructor(private val redis: RedisDataSource) {
     ): Boolean =
         eval(
             "claim",
-            keys = listOf(ratingKey(modeId), waitKey(modeId), matchKey(matchId), ALLOC_STREAM),
+            keys =
+                listOf(
+                    ratingKey(modeId),
+                    waitKey(modeId),
+                    matchKey(matchId),
+                    ALLOC_STREAM,
+                    LIVE_MATCHES,
+                ),
             args =
                 buildList {
                     add(matchId)
@@ -108,8 +115,14 @@ class ValkeyQueue @Inject constructor(private val redis: RedisDataSource) {
     fun assign(matchId: String, assignment: ServerAssignment): Boolean =
         eval(
             "assign",
-            keys = listOf(matchKey(matchId)),
-            args = listOf(assignment.gameServerName, assignment.address, assignment.port.toString()),
+            keys = listOf(matchKey(matchId), LIVE_MATCHES),
+            args =
+                listOf(
+                    assignment.gameServerName,
+                    assignment.address,
+                    assignment.port.toString(),
+                    matchId,
+                ),
         ) == 1L
 
     /** @return false if the ticket was already past QUEUED, or is not this player's. */
@@ -125,7 +138,7 @@ class ValkeyQueue @Inject constructor(private val redis: RedisDataSource) {
     fun failRequeue(matchId: String, modeId: String): Long =
         eval(
             "fail_requeue",
-            keys = listOf(matchKey(matchId), ratingKey(modeId), waitKey(modeId)),
+            keys = listOf(matchKey(matchId), ratingKey(modeId), waitKey(modeId), LIVE_MATCHES),
             args = listOf(matchId),
         )
 
@@ -172,6 +185,9 @@ class ValkeyQueue @Inject constructor(private val redis: RedisDataSource) {
         private val SCRIPTS = listOf("enqueue", "claim", "assign", "cancel", "fail_requeue")
 
         const val ALLOC_STREAM = "mm:alloc"
+
+        /** Matches that exist but no server has taken yet — the watchdog's worklist. */
+        const val LIVE_MATCHES = "mm:matches:live"
 
         fun guardKey(playerId: String) = "mm:player:$playerId"
 

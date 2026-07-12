@@ -9,6 +9,7 @@
 -- the reaper).
 --
 -- KEYS[1] = mm:match:{matchId}
+-- KEYS[2] = mm:matches:live
 -- ARGV[1] = gsName, ARGV[2] = address, ARGV[3] = port
 --
 -- This is also where the player guards are released: the ticket is terminal,
@@ -17,10 +18,12 @@
 -- first match was still being allocated.
 
 local matchKey = KEYS[1]
+local liveSet  = KEYS[2]
 
 local gsName  = ARGV[1]
 local address = ARGV[2]
 local port    = ARGV[3]
+local matchId = ARGV[4]
 
 local state = redis.call('HGET', matchKey, 'state')
 if not state then
@@ -35,6 +38,10 @@ redis.call('HSET', matchKey,
   'gsName',  gsName,
   'address', address,
   'port',    port)
+
+-- A server has it now, so the watchdog stops looking. An ASSIGNED match that is
+-- old is just a long game, not a stalled one.
+redis.call('SREM', liveSet, matchId)
 
 local ticketsCsv = redis.call('HGET', matchKey, 'tickets')
 if ticketsCsv then

@@ -12,6 +12,7 @@
 -- KEYS[2] = mm:q:{mode}:wait
 -- KEYS[3] = mm:match:{matchId}
 -- KEYS[4] = mm:alloc                  the allocation stream
+-- KEYS[5] = mm:matches:live           claimed but not yet handed to a server
 --
 -- ARGV[1] = matchId
 -- ARGV[2] = modeId
@@ -24,6 +25,7 @@ local ratingZ  = KEYS[1]
 local waitZ    = KEYS[2]
 local matchKey = KEYS[3]
 local allocS   = KEYS[4]
+local liveSet  = KEYS[5]
 
 local matchId  = ARGV[1]
 local modeId   = ARGV[2]
@@ -93,5 +95,11 @@ redis.call('EXPIRE', matchKey, ttl)
 -- Recovery is then not a special case — it is the consumer group replaying
 -- what was never acknowledged.
 redis.call('XADD', allocS, '*', 'matchId', matchId, 'modeId', modeId)
+
+-- The watchdog's worklist: matches that exist but no server has yet. Removed on
+-- assign (the server owns it from then on) and on fail_requeue. Without this a
+-- match whose allocation is lost would leave its players waiting forever, and
+-- nothing on the happy path would ever notice.
+redis.call('SADD', liveSet, matchId)
 
 return 1

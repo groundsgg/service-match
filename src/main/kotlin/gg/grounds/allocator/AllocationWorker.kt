@@ -176,13 +176,15 @@ constructor(
 
         val won = queue.assign(matchId, server)
         if (!won) {
-            // Someone else assigned this match while we were allocating. Their
-            // server is the one the players were told about, so ours is an
-            // orphan — delete it rather than leave it for the reaper.
+            // Someone else assigned this match while we were allocating. In the
+            // old one-match-per-server model we would delete our server here; we
+            // must NOT do that now, because it is carrying other people's live
+            // matches. We simply leaked a counter slot, and the gamemode's own
+            // counter sync will reclaim it.
             log.warn(
-                "Lost the assign race, deleting our server (match=$matchId, gs=${server.gameServerName})"
+                "Lost the assign race; leaked a slot on ${server.gameServerName} " +
+                    "(match=$matchId) — the server's counter sync will reclaim it"
             )
-            agones.delete(server.gameServerName)
         } else {
             log.info(
                 "Assigned match (id=$matchId, gs=${server.gameServerName}, addr=${server.address}:${server.port})"

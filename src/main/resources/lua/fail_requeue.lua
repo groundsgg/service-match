@@ -14,10 +14,12 @@
 -- KEYS[1] = mm:match:{matchId}
 -- KEYS[2] = mm:q:{mode}:rating
 -- KEYS[3] = mm:q:{mode}:wait
+-- KEYS[4] = mm:matches:live
 
 local matchKey = KEYS[1]
 local ratingZ  = KEYS[2]
 local waitZ    = KEYS[3]
+local liveSet  = KEYS[4]
 
 local state = redis.call('HGET', matchKey, 'state')
 -- An assigned match must never be unwound: its players may already be on the
@@ -49,5 +51,6 @@ for id in string.gmatch(ticketsCsv, '([^,]+)') do
 end
 
 redis.call('HSET', matchKey, 'state', 'FAILED')
+redis.call('SREM', liveSet, ARGV[1])
 
 return requeued
