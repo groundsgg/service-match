@@ -1,0 +1,12 @@
+.git
+.github
+.devspace
+.gradle
+.idea
+.kotlin
+**/build
+**/.gradle
+*.iml
+*.log
+README.md
+devspace.yaml

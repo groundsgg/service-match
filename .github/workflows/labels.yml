@@ -1,0 +1,20 @@
+name: Label Sync
+
+on:
+  push:
+    branches:
+      - 'main'
+    paths:
+      - '.github/workflows/labels.yml'
+  pull_request:
+    paths:
+      - '.github/workflows/labels.yml'
+  workflow_dispatch: # Allow manual triggering
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  reusable:
+    uses: groundsgg/.github/.github/workflows/label-sync.yml@main
