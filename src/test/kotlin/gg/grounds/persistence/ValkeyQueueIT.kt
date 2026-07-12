@@ -260,6 +260,59 @@ class ValkeyQueueIT {
         assertNotNull(queue.findTicket(ticket("p1").also { queue.enqueue(it, TTL) }.id))
     }
 
+    @Test
+    fun `a claim puts the match on the watchdog's worklist`() {
+        val a = ticket("p1")
+        val b = ticket("p2")
+        queue.enqueue(a, TTL)
+        queue.enqueue(b, TTL)
+
+        val matchId = UUID.randomUUID().toString()
+        queue.claim(matchId, "duel", listOf(a.id, b.id), 1, Instant.now(), TTL)
+
+        // A match exists the moment it is claimed, but no server has it yet. If it
+        // were not tracked from here, an allocation lost on the way would leave the
+        // players waiting on a game that will never start, and nothing on the happy
+        // path would ever notice.
+        assertTrue(isLive(matchId), "a claimed match must be watched until a server has it")
+    }
+
+    @Test
+    fun `assignment takes the match off the worklist`() {
+        val a = ticket("p1")
+        val b = ticket("p2")
+        queue.enqueue(a, TTL)
+        queue.enqueue(b, TTL)
+        val matchId = UUID.randomUUID().toString()
+        queue.claim(matchId, "duel", listOf(a.id, b.id), 1, Instant.now(), TTL)
+
+        queue.assign(matchId, ServerAssignment("gs", "10.0.0.1", 25565))
+
+        // The server owns it from here. Keeping it on the worklist would mean the
+        // watchdog eventually pulls players out of a game they are in the middle of.
+        assertFalse(isLive(matchId), "an assigned match is the server's, not the watchdog's")
+    }
+
+    @Test
+    fun `a failed requeue takes the match off the worklist`() {
+        val a = ticket("p1")
+        val b = ticket("p2")
+        queue.enqueue(a, TTL)
+        queue.enqueue(b, TTL)
+        val matchId = UUID.randomUUID().toString()
+        queue.claim(matchId, "duel", listOf(a.id, b.id), 1, Instant.now(), TTL)
+
+        queue.failRequeue(matchId, "duel")
+
+        // The players are back on the queue; the match is over as far as anyone is
+        // concerned. Leaving it live would have the watchdog requeue them a second
+        // time, out of whatever match they have since been put in.
+        assertFalse(isLive(matchId))
+    }
+
+    private fun isLive(matchId: String): Boolean =
+        redis.execute("SISMEMBER", ValkeyQueue.LIVE_MATCHES, matchId).toLong() == 1L
+
     companion object {
         private const val TTL = 3600L
     }

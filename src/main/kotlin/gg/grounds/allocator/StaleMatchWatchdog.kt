@@ -58,7 +58,7 @@ constructor(
                 // simply a long game. Requeueing on age here would drag players
                 // out of a fight they are in the middle of.
                 if (state == null || state != "FORMED") {
-                    redis.execute("SREM", LIVE_MATCHES, matchId)
+                    redis.execute("SREM", ValkeyQueue.LIVE_MATCHES, matchId)
                     continue
                 }
 
@@ -75,7 +75,7 @@ constructor(
                     "Match never started, requeued $requeued player(s) " +
                         "(id=$matchId, state=$state, age=${(now - createdAt) / 1000}s)"
                 )
-                redis.execute("SREM", LIVE_MATCHES, matchId)
+                redis.execute("SREM", ValkeyQueue.LIVE_MATCHES, matchId)
                 rescued++
             }
 
@@ -90,14 +90,11 @@ constructor(
     }
 
     private fun liveMatchIds(): List<String> {
-        val reply = redis.execute("SMEMBERS", LIVE_MATCHES) ?: return emptyList()
+        val reply = redis.execute("SMEMBERS", ValkeyQueue.LIVE_MATCHES) ?: return emptyList()
         return (0 until reply.size()).mapNotNull { reply[it]?.toString() }
     }
 
     companion object {
         private val log: Logger = Logger.getLogger(StaleMatchWatchdog::class.java)
-
-        /** Matches the claim script has committed and nobody has finished yet. */
-        const val LIVE_MATCHES = "mm:matches:live"
     }
 }
