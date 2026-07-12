@@ -30,6 +30,11 @@ dependencies {
     // Queue ticks. The band widens with waiting time, so the matcher is
     // inherently timer-driven — a purely event-driven loop could not widen.
     implementation("io.quarkus:quarkus-scheduler")
+    // Agones lives in the same cluster we do, so allocation is a local call
+    // against the in-cluster ServiceAccount — no mTLS to a foreign apiserver,
+    // no aggregation-layer hop. (That whole apparatus was only needed while the
+    // matchmaker was central.)
+    implementation("io.quarkus:quarkus-kubernetes-client")
     // JWT validation for incoming gRPC calls. SDK attaches the
     // projected ServiceAccount token (aud=grounds-services); the
     // interceptor reads + verifies it against k8s JWKS.
