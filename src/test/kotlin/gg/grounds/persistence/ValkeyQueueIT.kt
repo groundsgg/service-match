@@ -310,6 +310,29 @@ class ValkeyQueueIT {
         assertFalse(isLive(matchId))
     }
 
+    @Test
+    fun `the roster reads back as teams of players, in draft order`() {
+        val a = ticket("p1")
+        val b = ticket("p2")
+        val c = ticket("p3")
+        val d = ticket("p4")
+        listOf(a, b, c, d).forEach { queue.enqueue(it, TTL) }
+
+        val matchId = UUID.randomUUID().toString()
+        // teamSize 2 → [a,b] against [c,d].
+        queue.claim(matchId, "duel", listOf(a.id, b.id, c.id, d.id), 2, Instant.now(), TTL)
+
+        // The claim script stores TICKETS; the server deals in players, and it must
+        // get the teams exactly as they were drafted — a server that re-shuffled
+        // them would play a different match than the one that gets rated.
+        assertEquals(listOf(listOf("p1", "p2"), listOf("p3", "p4")), queue.matchTeams(matchId))
+    }
+
+    @Test
+    fun `an unknown match has no roster rather than blowing up`() {
+        assertEquals(emptyList<List<String>>(), queue.matchTeams("does-not-exist"))
+    }
+
     private fun isLive(matchId: String): Boolean =
         redis.execute("SISMEMBER", ValkeyQueue.LIVE_MATCHES, matchId).toLong() == 1L
 

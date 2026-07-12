@@ -166,6 +166,25 @@ class ValkeyQueue @Inject constructor(private val redis: RedisDataSource) {
         )
     }
 
+    /**
+     * The match's roster, in the order it was drafted: teams of player ids.
+     *
+     * The claim script stores teams as ticket ids (`a,b;c,d`) because tickets are what it has. The
+     * server has no idea what a ticket is — it deals in players — so they are resolved here.
+     *
+     * Draft order is preserved deliberately. The matchmaker balanced these teams, and a server that
+     * re-shuffled them would play a different match than the one that gets rated.
+     */
+    fun matchTeams(matchId: String): List<List<String>> {
+        val encoded = hashes.hget(matchKey(matchId), "teams") ?: return emptyList()
+        return encoded
+            .split(';')
+            .filter { it.isNotEmpty() }
+            .map { team ->
+                team.split(',').filter { it.isNotEmpty() }.mapNotNull { findTicket(it)?.playerId }
+            }
+    }
+
     /** Tickets waiting in a mode, oldest first. The oldest is the matcher's anchor. */
     fun queuedTicketIdsByWait(modeId: String, limit: Int): List<String> =
         sortedSets.zrange(waitKey(modeId), 0, (limit - 1).toLong())

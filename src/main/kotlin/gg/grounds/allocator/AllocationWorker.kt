@@ -29,6 +29,7 @@ constructor(
     private val redis: RedisDataSource,
     private val queue: ValkeyQueue,
     private val agones: AgonesAllocator,
+    private val matchHost: MatchHostClient,
     private val modes: ModeRegistry,
     @param:ConfigProperty(name = "grounds.match.alloc.lease-ms") private val leaseMs: Long,
     @param:ConfigProperty(name = "grounds.match.alloc.max-attempts") private val maxAttempts: Int,
@@ -169,6 +170,31 @@ constructor(
             // them sit in a match that cannot start; they keep the wait they
             // earned, so they are first in line next tick.
             log.warn("No server available, requeueing players (match=$matchId, fleet=$fleet)")
+            queue.failRequeue(matchId, modeId)
+            ack(entryId)
+            return
+        }
+
+        // Tell the server the match is coming, and do it BEFORE the assign.
+        //
+        // The order is the whole safety property. `assign` is what declares the
+        // server owns this match: it releases the player guards and takes the
+        // match off the watchdog's worklist. Push after that and a lost push is
+        // lost forever — the match reads as healthy, the watchdog has stopped
+        // looking, and the players wait for a game that nobody is building.
+        //
+        // Pushed first, the match stays FORMED and on the worklist until a server
+        // has actually accepted it. Every way this can fail — refusal, timeout,
+        // unreachable pod — lands the players back on the queue with the wait they
+        // had already earned.
+        val teams = queue.matchTeams(matchId)
+        if (!matchHost.startMatch(server, matchId, modeId, teams)) {
+            log.warn(
+                "Server would not take the match, requeueing players " +
+                    "(id=$matchId, gs=${server.gameServerName})"
+            )
+            // The slot we claimed on that server leaks. The gamemode's counter
+            // sync reclaims it — far cheaper than players stuck in a dead match.
             queue.failRequeue(matchId, modeId)
             ack(entryId)
             return
