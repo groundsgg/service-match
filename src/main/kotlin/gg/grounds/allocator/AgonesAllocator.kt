@@ -37,6 +37,9 @@ class AgonesAllocator
 constructor(
     private val kubernetes: KubernetesClient,
     @param:ConfigProperty(name = "grounds.match.agones.namespace") private val namespace: String,
+    @param:ConfigProperty(name = "grounds.match.agones.address-type")
+    private val addressType: String,
+    @param:ConfigProperty(name = "grounds.match.agones.port") private val port: Int,
 ) {
 
     /**
@@ -70,7 +73,7 @@ constructor(
             return null
         }
 
-        return status.toAssignment()
+        return assignmentFrom(status)
     }
 
     /** Look up a server by name — used to re-derive an address after a crash. */
@@ -84,15 +87,41 @@ constructor(
 
         @Suppress("UNCHECKED_CAST")
         val status = gs.additionalProperties["status"] as? Map<String, Any?> ?: return null
-        return status.toAssignment(name = gs.metadata?.name)
+        return assignmentFrom(status, gs.metadata?.name)
     }
 
-    private fun Map<String, Any?>.toAssignment(name: String? = null): ServerAssignment? {
-        val gsName = name ?: this["gameServerName"]?.toString() ?: return null
-        val address = this["address"]?.toString() ?: return null
+    /**
+     * Our fleets run `portPolicy: None` — Agones does no port management for them, because the
+     * proxy reaches a server on its pod IP and a host port only ever caused collisions.
+     *
+     * Two consequences, and both of them bite here:
+     *
+     * `status.ports` is **empty**. Reading a port out of it does not merely give the wrong number,
+     * it gives nothing at all — and an allocator that treats that as failure reports "no server
+     * available" for a fleet that is standing there idle, forever. The port is fixed instead.
+     *
+     * `status.address` is the **node's** address, not the pod's. Dialling it would reach the node,
+     * which is not where the match is. The pod's address is in `status.addresses` under `PodIP` —
+     * the same entry, by the same rule, that plugin-agones registers proxy backends by.
+     */
+    internal fun assignmentFrom(
+        status: Map<String, Any?>,
+        name: String? = null,
+    ): ServerAssignment? {
+        val gsName = name ?: status["gameServerName"]?.toString() ?: return null
 
-        @Suppress("UNCHECKED_CAST") val ports = this["ports"] as? List<Map<String, Any?>>
-        val port = ports?.firstOrNull()?.get("port")?.toString()?.toIntOrNull() ?: return null
+        @Suppress("UNCHECKED_CAST") val addresses = status["addresses"] as? List<Map<String, Any?>>
+        val address =
+            addresses
+                ?.firstOrNull { it["type"]?.toString() == addressType }
+                ?.get("address")
+                ?.toString()
+        if (address == null) {
+            log.error(
+                "GameServer has no $addressType address, cannot route players to it (gs=$gsName)"
+            )
+            return null
+        }
 
         return ServerAssignment(gsName, address, port)
     }
