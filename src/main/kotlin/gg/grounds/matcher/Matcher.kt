@@ -2,6 +2,7 @@ package gg.grounds.matcher
 
 import gg.grounds.domain.BandedMmrMatchFunction
 import gg.grounds.domain.MatchFunction
+import gg.grounds.domain.MatchRecordRepository
 import gg.grounds.domain.ModeConfig
 import gg.grounds.domain.Ticket
 import gg.grounds.persistence.ValkeyQueue
@@ -30,6 +31,7 @@ class Matcher
 constructor(
     private val queue: ValkeyQueue,
     private val modes: ModeRegistry,
+    private val matches: MatchRecordRepository,
     @param:ConfigProperty(name = "grounds.match.ticket.ttl-seconds") private val ticketTtl: Long,
     @param:ConfigProperty(name = "grounds.match.match.ttl-seconds") private val matchTtl: Long,
 ) {
@@ -73,6 +75,7 @@ constructor(
                 )
             if (won) {
                 committed++
+                recordDurably(proposal, mode, tickets)
                 log.info(
                     "Formed match (id=${proposal.matchId}, mode=${mode.modeId}, " +
                         "players=${proposal.ticketIds.size}, spread=${"%.2f".format(proposal.quality)})"
@@ -84,6 +87,39 @@ constructor(
             }
         }
         return committed
+    }
+
+    /**
+     * Write the match to Postgres, with its roster.
+     *
+     * This is what lets the result path later reject a result for a match we never formed, or a
+     * placement for a player who was never in it. It happens after the claim rather than before, so
+     * a failure here costs this match its rating — not the match itself. Players would rather play
+     * an unrated game than no game.
+     */
+    private fun recordDurably(
+        proposal: gg.grounds.domain.MatchProposal,
+        mode: ModeConfig,
+        tickets: List<Ticket>,
+    ) {
+        try {
+            val byId = tickets.associateBy { it.id }
+            val playerIds =
+                proposal.ticketIds.mapNotNull { id ->
+                    byId[id]?.playerId?.let { java.util.UUID.fromString(it) }
+                }
+            matches.recordMatch(
+                matchId = java.util.UUID.fromString(proposal.matchId),
+                modeId = mode.modeId,
+                ranked = mode.ranked,
+                playerIds = playerIds,
+            )
+        } catch (e: Exception) {
+            log.error(
+                "Failed to record match durably; it will play but not rate (id=${proposal.matchId})",
+                e,
+            )
+        }
     }
 
     private fun snapshot(mode: ModeConfig): List<Ticket> =

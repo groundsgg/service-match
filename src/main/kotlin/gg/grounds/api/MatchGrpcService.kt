@@ -2,6 +2,7 @@ package gg.grounds.api
 
 import gg.grounds.domain.BandConfig
 import gg.grounds.domain.ModeConfig
+import gg.grounds.domain.PlayerPlacement
 import gg.grounds.domain.Rating
 import gg.grounds.domain.RatingRepository
 import gg.grounds.domain.TicketState as DomainTicketState
@@ -17,6 +18,8 @@ import gg.grounds.grpc.match.GetTicketRequest
 import gg.grounds.grpc.match.MatchServiceGrpc
 import gg.grounds.grpc.match.QueueStatsReply
 import gg.grounds.grpc.match.QueueStatsRequest
+import gg.grounds.grpc.match.ReportMatchResultReply
+import gg.grounds.grpc.match.ReportMatchResultRequest
 import gg.grounds.grpc.match.TicketState
 import gg.grounds.grpc.match.UpsertQueueReply
 import gg.grounds.grpc.match.UpsertQueueRequest
@@ -44,6 +47,7 @@ constructor(
     private val ratings: RatingRepository,
     private val queue: QueueService,
     private val modes: ModeRegistry,
+    private val results: ResultService,
     @param:ConfigProperty(name = "grounds.match.rating.default-mu") private val defaultMu: Double,
     @param:ConfigProperty(name = "grounds.match.rating.default-sigma")
     private val defaultSigma: Double,
@@ -256,6 +260,73 @@ constructor(
             log.error("UpsertQueue failed (mode=${request.modeId})", e)
             responseObserver.onError(
                 Status.INTERNAL.withDescription("upsert failed").asRuntimeException()
+            )
+        }
+    }
+
+    override fun reportMatchResult(
+        request: ReportMatchResultRequest,
+        responseObserver: StreamObserver<ReportMatchResultReply>,
+    ) {
+        try {
+            val matchId =
+                try {
+                    UUID.fromString(requireNonEmpty(request.matchId, "match_id"))
+                } catch (_: IllegalArgumentException) {
+                    throw Status.INVALID_ARGUMENT.withDescription(
+                            "match_id is not a UUID: ${request.matchId}"
+                        )
+                        .asRuntimeException()
+                }
+
+            if (request.resultsList.isEmpty()) {
+                throw Status.INVALID_ARGUMENT.withDescription("a result needs at least one player")
+                    .asRuntimeException()
+            }
+
+            val placements =
+                request.resultsList.map { r ->
+                    if (r.placement < 1) {
+                        throw Status.INVALID_ARGUMENT.withDescription(
+                                "placement is 1-based; got ${r.placement}"
+                            )
+                            .asRuntimeException()
+                    }
+                    PlayerPlacement(parsePlayerId(r.playerId), r.placement)
+                }
+
+            val outcome =
+                results.report(
+                    matchId = matchId,
+                    placements = placements,
+                    terminationReason = request.terminationReason.ifBlank { "normal_finish" },
+                )
+
+            responseObserver.onNext(
+                ReportMatchResultReply.newBuilder()
+                    .setApplied(outcome.applied)
+                    .setRated(outcome.rated)
+                    .build()
+            )
+            responseObserver.onCompleted()
+        } catch (e: UnknownMatchException) {
+            // Not a race: the match record is written when the match is formed,
+            // so an unknown id means this match was never ours.
+            responseObserver.onError(
+                Status.NOT_FOUND.withDescription(e.message).asRuntimeException()
+            )
+        } catch (e: NotInMatchException) {
+            // A gamemode naming players who were not in the match would be able
+            // to move any player's rating at will.
+            responseObserver.onError(
+                Status.PERMISSION_DENIED.withDescription(e.message).asRuntimeException()
+            )
+        } catch (e: StatusRuntimeException) {
+            responseObserver.onError(e)
+        } catch (e: Exception) {
+            log.error("ReportMatchResult failed (match=${request.matchId})", e)
+            responseObserver.onError(
+                Status.INTERNAL.withDescription("result failed").asRuntimeException()
             )
         }
     }

@@ -275,7 +275,15 @@ class ValkeyQueueIT {
             container = PostgreSQLContainer(DockerImageName.parse("postgres:16-alpine"))
             container.start()
             return mapOf(
-                "quarkus.datasource.jdbc.url" to container.jdbcUrl,
+                // Flyway creates and migrates the `match` schema; without
+                // currentSchema the queries would look in `public` and find
+                // nothing.
+                "quarkus.datasource.jdbc.url" to
+                    // Testcontainers' url already carries query params, so the
+                    // separator depends on what is there.
+                    container.jdbcUrl +
+                        (if ("?" in container.jdbcUrl) "&" else "?") +
+                        "currentSchema=match",
                 "quarkus.datasource.username" to container.username,
                 "quarkus.datasource.password" to container.password,
             )
