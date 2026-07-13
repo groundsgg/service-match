@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/groundsgg/service-match/compare/v0.2.0...v0.2.1) (2026-07-13)
+
+
+### Bug Fixes
+
+* **grpc:** the RPCs that touch Valkey and Postgres must be @Blocking ([#10](https://github.com/groundsgg/service-match/issues/10)) ([3f77dd7](https://github.com/groundsgg/service-match/commit/3f77dd71a5269075ebc3052b3e54360d3147115d))
+
 ## [0.2.0](https://github.com/groundsgg/service-match/compare/v0.1.0...v0.2.0) (2026-07-13)
 
 
