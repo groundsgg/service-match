@@ -116,15 +116,32 @@ constructor(
                 ?.firstOrNull { it["type"]?.toString() == addressType }
                 ?.get("address")
                 ?.toString()
-        if (address == null) {
+        // Agones does not always publish the PodIP in status.addresses — our own
+        // fleets came up with only Hostname and InternalIP, while the bundle's
+        // lobby fleet had all three. Rather than depend on that, fall back to the
+        // pod itself: Agones names the pod after the GameServer, so it is a direct
+        // lookup. Reading the node's InternalIP instead would be worse than
+        // failing — the players would be sent to a machine, not to their match.
+        val resolved = address ?: podIp(gsName)
+        if (resolved == null) {
             log.error(
-                "GameServer has no $addressType address, cannot route players to it (gs=$gsName)"
+                "GameServer has no $addressType address and its pod has no IP, " +
+                    "cannot route players to it (gs=$gsName)"
             )
             return null
         }
 
-        return ServerAssignment(gsName, address, port)
+        return ServerAssignment(gsName, resolved, port)
     }
+
+    /** The GameServer's pod carries the same name, so this is a direct lookup. */
+    private fun podIp(gsName: String): String? =
+        try {
+            kubernetes.pods().inNamespace(namespace).withName(gsName).get()?.status?.podIP
+        } catch (e: Exception) {
+            log.warn("Could not read the pod for $gsName: ${e.message}")
+            null
+        }
 
     /**
      * A Minestom runtime hosts *many* matches at once, so "allocate a server" is the wrong

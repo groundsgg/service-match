@@ -101,11 +101,15 @@ constructor(
                 ">",
             ) ?: return
 
-        for (s in 0 until reply.size()) {
-            val entries = reply[s]?.get(1) ?: continue
-            for (i in 0 until entries.size()) {
-                handleEntry(entries[i])
-            }
+        // RESP3 — which the Quarkus client speaks — answers XREADGROUP with a MAP
+        // keyed by stream name, not the RESP2 array of [name, entries] pairs.
+        // Indexing a map throws ("Multi is a Map"), and it throws on every single
+        // pump: the allocator never drained a new entry in its life, it only ever
+        // picked matches up later via XAUTOCLAIM's idle-reclaim path. That is why
+        // allocation looked merely *slow* rather than broken.
+        val entries = reply.get(ValkeyQueue.ALLOC_STREAM) ?: return
+        for (i in 0 until entries.size()) {
+            handleEntry(entries[i])
         }
     }
 
