@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.2](https://github.com/groundsgg/service-match/compare/v0.2.1...v0.2.2) (2026-07-13)
+
+
+### Bug Fixes
+
+* **allocator:** drain the stream RESP3 gives us, and find the pod's IP ([#12](https://github.com/groundsgg/service-match/issues/12)) ([bfd2982](https://github.com/groundsgg/service-match/commit/bfd2982cd3e79c8460667f174d0d7e3a0a3440b1))
+
 ## [0.2.1](https://github.com/groundsgg/service-match/compare/v0.2.0...v0.2.1) (2026-07-13)
 
 
