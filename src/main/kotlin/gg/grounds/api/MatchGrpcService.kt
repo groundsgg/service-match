@@ -28,6 +28,7 @@ import io.grpc.Status
 import io.grpc.StatusRuntimeException
 import io.grpc.stub.StreamObserver
 import io.quarkus.grpc.GrpcService
+import io.smallrye.common.annotation.Blocking
 import jakarta.inject.Inject
 import java.util.UUID
 import org.eclipse.microprofile.config.inject.ConfigProperty
@@ -53,6 +54,13 @@ constructor(
     private val defaultSigma: Double,
 ) : MatchServiceGrpc.MatchServiceImplBase() {
 
+    // Valkey and Postgres calls block, and Quarkus runs a gRPC method on the Vert.x
+    // event loop unless told otherwise — where blocking throws outright:
+    //   IllegalStateException: The current thread cannot be blocked: vert.x-eventloop-thread-0
+    // Nothing in the unit tests catches this: they call the service directly and
+    // never cross the gRPC layer. It only appears the first time a real client
+    // calls in.
+    @Blocking
     override fun getRating(
         request: GetRatingRequest,
         responseObserver: StreamObserver<GetRatingReply>,
@@ -86,6 +94,7 @@ constructor(
         }
     }
 
+    @Blocking
     override fun enqueue(request: EnqueueRequest, responseObserver: StreamObserver<EnqueueReply>) {
         try {
             val playerId = parsePlayerId(request.playerId)
@@ -122,6 +131,7 @@ constructor(
         }
     }
 
+    @Blocking
     override fun cancelTicket(
         request: CancelTicketRequest,
         responseObserver: StreamObserver<CancelTicketReply>,
@@ -146,6 +156,7 @@ constructor(
         }
     }
 
+    @Blocking
     override fun getTicket(
         request: GetTicketRequest,
         responseObserver: StreamObserver<GetTicketReply>,
@@ -185,6 +196,7 @@ constructor(
         }
     }
 
+    @Blocking
     override fun getQueueStats(
         request: QueueStatsRequest,
         responseObserver: StreamObserver<QueueStatsReply>,
@@ -264,6 +276,7 @@ constructor(
         }
     }
 
+    @Blocking
     override fun reportMatchResult(
         request: ReportMatchResultRequest,
         responseObserver: StreamObserver<ReportMatchResultReply>,
