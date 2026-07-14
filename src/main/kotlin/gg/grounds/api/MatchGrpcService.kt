@@ -23,7 +23,6 @@ import gg.grounds.grpc.match.ReportMatchResultRequest
 import gg.grounds.grpc.match.TicketState
 import gg.grounds.grpc.match.UpsertQueueReply
 import gg.grounds.grpc.match.UpsertQueueRequest
-import gg.grounds.matcher.ModeRegistry
 import io.grpc.Status
 import io.grpc.StatusRuntimeException
 import io.grpc.stub.StreamObserver
@@ -47,7 +46,6 @@ class MatchGrpcService
 constructor(
     private val ratings: RatingRepository,
     private val queue: QueueService,
-    private val modes: ModeRegistry,
     private val results: ResultService,
     @param:ConfigProperty(name = "grounds.match.rating.default-mu") private val defaultMu: Double,
     @param:ConfigProperty(name = "grounds.match.rating.default-sigma")
@@ -258,7 +256,7 @@ constructor(
                         ),
                 )
 
-            val created = modes.upsert(config)
+            val created = queue.upsertMode(config)
             log.info(
                 "Upserted mode (id=$modeId, ${config.teamCount}x${config.teamSize}, " +
                     "ranked=${config.ranked}, created=$created)"

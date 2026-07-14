@@ -8,9 +8,11 @@ import gg.grounds.domain.RatingRepository
 import gg.grounds.domain.RatingTransition
 import gg.grounds.domain.ResultOutcome
 import gg.grounds.domain.TeamResult
+import gg.grounds.leaderboard.LeaderboardClient
 import jakarta.enterprise.context.ApplicationScoped
 import jakarta.inject.Inject
 import java.util.UUID
+import kotlin.math.roundToLong
 import org.eclipse.microprofile.config.inject.ConfigProperty
 import org.jboss.logging.Logger
 
@@ -37,6 +39,7 @@ constructor(
     private val matches: MatchRecordRepository,
     private val ratings: RatingRepository,
     private val calculator: RatingCalculator,
+    private val leaderboard: LeaderboardClient,
     @param:ConfigProperty(name = "grounds.match.rating.default-mu") private val defaultMu: Double,
     @param:ConfigProperty(name = "grounds.match.rating.default-sigma")
     private val defaultSigma: Double,
@@ -73,13 +76,32 @@ constructor(
                 emptyMap()
             }
 
-        return matches.applyResult(
-            matchId = matchId,
-            modeId = match.modeId,
-            placements = placements,
-            ratedUpdates = transitions,
-            terminationReason = terminationReason,
-        )
+        val outcome =
+            matches.applyResult(
+                matchId = matchId,
+                modeId = match.modeId,
+                placements = placements,
+                ratedUpdates = transitions,
+                terminationReason = terminationReason,
+            )
+
+        // The result is already committed by the time we get here — applyResult
+        // has returned. The leaderboard is a nice-to-have on top of a result that
+        // is already the source of truth, so this stays outside any transaction:
+        // LeaderboardClient never throws, and even if it somehow did, this must
+        // not be allowed to undo what Postgres already has.
+        if (outcome.applied && outcome.rated) {
+            for ((playerId, transition) in transitions) {
+                leaderboard.submitScore(
+                    boardId = match.modeId,
+                    playerId = playerId.toString(),
+                    score = (transition.after.display * 100).roundToLong(),
+                    idempotencyKey = "$matchId:$playerId",
+                )
+            }
+        }
+
+        return outcome
     }
 
     private fun computeRatings(
