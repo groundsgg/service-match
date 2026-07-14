@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.2](https://github.com/groundsgg/service-match/compare/v0.3.1...v0.3.2) (2026-07-14)
+
+
+### Bug Fixes
+
+* **leaderboard:** shift the board score so a fresh player is not zero ([#18](https://github.com/groundsgg/service-match/issues/18)) ([19604ae](https://github.com/groundsgg/service-match/commit/19604ae46d591222cc25a60e7cec572e6c5583bd))
+
 ## [0.3.1](https://github.com/groundsgg/service-match/compare/v0.3.0...v0.3.1) (2026-07-14)
 
 
