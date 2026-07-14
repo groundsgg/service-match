@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/groundsgg/service-match/compare/v0.3.0...v0.3.1) (2026-07-14)
+
+
+### Bug Fixes
+
+* **api:** UpsertQueue must be @Blocking now that it writes to Valkey ([#16](https://github.com/groundsgg/service-match/issues/16)) ([3ddd649](https://github.com/groundsgg/service-match/commit/3ddd64961ce09aea4a363bbc4f3348207c4b3aff))
+
 ## [0.3.0](https://github.com/groundsgg/service-match/compare/v0.2.2...v0.3.0) (2026-07-14)
 
 
