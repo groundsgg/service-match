@@ -220,6 +220,10 @@ constructor(
         }
     }
 
+    // Writes the mode through to Valkey now, so it can no longer run on the event
+    // loop — it was the one RPC that never needed @Blocking, back when the registry
+    // was memory-only.
+    @Blocking
     override fun upsertQueue(
         request: UpsertQueueRequest,
         responseObserver: StreamObserver<UpsertQueueReply>,
