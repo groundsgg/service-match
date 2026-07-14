@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/groundsgg/service-match/compare/v0.2.2...v0.3.0) (2026-07-14)
+
+
+### Features
+
+* **match:** persist mode configs and write ranked results to the leaderboard ([#14](https://github.com/groundsgg/service-match/issues/14)) ([091abf9](https://github.com/groundsgg/service-match/commit/091abf9b1f64903607f78e86f036f77f3ba84b26))
+
 ## [0.2.2](https://github.com/groundsgg/service-match/compare/v0.2.1...v0.2.2) (2026-07-13)
 
 
