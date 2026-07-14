@@ -12,6 +12,7 @@ import jakarta.inject.Inject
 import java.net.ServerSocket
 import java.util.UUID
 import kotlin.math.roundToLong
+import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.mockito.kotlin.any
@@ -138,6 +139,18 @@ class ResultServiceLeaderboardTest {
         }
     }
 
+    /**
+     * Mirrors ResultService.boardScore: the conservative rating, shifted by the starting mu so a
+     * fresh player reads 2500 instead of 0 and a below-average one is not negative. A pure display
+     * transform — it cannot reorder anybody.
+     */
     private fun conservativeScore(rating: gg.grounds.domain.Rating): Long =
-        (rating.display * 100).roundToLong()
+        ((rating.display + 25.0) * 100).roundToLong().coerceAtLeast(0)
+
+    @Test
+    fun `the board score is floored at zero rather than going negative`() {
+        // mu far below the floor: display = -50 - 3*8.333 = -75, +25 is still deeply negative.
+        val score = conservativeScore(gg.grounds.domain.Rating(mu = -50.0, sigma = 8.333))
+        assertEquals(0L, score)
+    }
 }
