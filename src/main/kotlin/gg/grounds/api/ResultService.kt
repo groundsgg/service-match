@@ -95,7 +95,7 @@ constructor(
                 leaderboard.submitScore(
                     boardId = match.modeId,
                     playerId = playerId.toString(),
-                    score = (transition.after.display * 100).roundToLong(),
+                    score = boardScore(transition.after),
                     idempotencyKey = "$matchId:$playerId",
                 )
             }
@@ -131,5 +131,25 @@ constructor(
 
     companion object {
         private val log: Logger = Logger.getLogger(ResultService::class.java)
+
+        /** OpenSkill's default starting mu. A fresh player lands on 2500. */
+        private const val STARTING_MU = 25.0
     }
+
+    /**
+     * The number a player sees on the board.
+     *
+     * The rating itself is [Rating.display] — mu - 3*sigma, the value the model is 99.7% sure the
+     * player is at least worth. That is the right quantity to rank by, but it is centred on zero: a
+     * fresh player is exactly 0 and anyone below average is negative, which reads like a bug on a
+     * leaderboard. Shifting by the starting mu puts a newcomer at 2500 and makes the board look
+     * like every ladder anyone has ever seen. It is a pure display transform — strictly increasing,
+     * so it cannot change anybody's rank.
+     *
+     * Floored at zero rather than allowed to go negative: below this a player would have to be
+     * worse than mu = 0, which the model treats as barely possible, and a negative score buys
+     * nothing.
+     */
+    private fun boardScore(rating: Rating): Long =
+        ((rating.display + STARTING_MU) * 100).roundToLong().coerceAtLeast(0)
 }
