@@ -1,5 +1,6 @@
 package gg.grounds.api
 
+import gg.grounds.domain.ModeConfig
 import gg.grounds.domain.Rating
 import gg.grounds.domain.RatingRepository
 import gg.grounds.domain.Ticket
@@ -70,4 +71,15 @@ constructor(
     fun queueDepth(modeId: String): Long = queue.queueDepth(modeId)
 
     fun isKnownMode(modeId: String): Boolean = modes.find(modeId) != null
+
+    /**
+     * Write the mode config through to Valkey before it ever reaches the in-memory registry — so
+     * that if the persist fails, the registry never advertises a mode a restart would lose.
+     *
+     * @return true if this is a new mode, matching `ModeRegistry.upsert`'s existing contract.
+     */
+    fun upsertMode(config: ModeConfig): Boolean {
+        queue.saveMode(config)
+        return modes.upsert(config)
+    }
 }

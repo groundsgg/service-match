@@ -51,6 +51,10 @@ dependencies {
     // built-in gRPC server interceptor.
     implementation("io.quarkus:quarkus-opentelemetry")
     implementation("gg.grounds:library-grpc-contracts-match:main-SNAPSHOT")
+    // service-leaderboard is the writer target for a rated result's post-match
+    // conservative skill; service-match is the only caller, forge never wires
+    // this contract up on the gamemode's side.
+    implementation("gg.grounds:library-grpc-contracts-leaderboard:main-SNAPSHOT")
 
     // Weng-Lin (OpenSkill) ratings. TrueSkill is the same family but is
     // patented until 2029-04-09 (WO2007094909A1) — not a risk worth taking

@@ -1,5 +1,7 @@
 package gg.grounds.persistence
 
+import gg.grounds.domain.BandConfig
+import gg.grounds.domain.ModeConfig
 import gg.grounds.domain.ServerAssignment
 import gg.grounds.domain.Ticket
 import gg.grounds.domain.TicketState
@@ -191,6 +193,57 @@ class ValkeyQueue @Inject constructor(private val redis: RedisDataSource) {
 
     fun queueDepth(modeId: String): Long = sortedSets.zcard(ratingKey(modeId))
 
+    /**
+     * Persist one mode's config so it survives a restart. A single hash, keyed by mode id — every
+     * live mode in one place, so the startup load is one HGETALL rather than a SCAN over per-mode
+     * keys.
+     *
+     * Not scripted: this is a single-key write, and Valkey already makes that atomic. The Lua
+     * scripts above exist for invariants that span multiple keys, which this is not.
+     */
+    fun saveMode(config: ModeConfig) {
+        hashes.hset(MODES_KEY, config.modeId, encodeMode(config))
+    }
+
+    /** Every persisted mode, for the registry to reload at startup. */
+    fun loadModes(): List<ModeConfig> =
+        hashes.hgetall(MODES_KEY).map { (modeId, encoded) -> decodeMode(modeId, encoded) }
+
+    private fun encodeMode(config: ModeConfig): String {
+        val band = config.band
+        return listOf(
+                config.teamSize,
+                config.teamCount,
+                config.ranked,
+                band.b0,
+                band.k,
+                band.w,
+                band.stepSeconds,
+                band.mercySeconds,
+                band.mutualSeconds,
+            )
+            .joinToString("|")
+    }
+
+    private fun decodeMode(modeId: String, encoded: String): ModeConfig {
+        val f = encoded.split("|")
+        return ModeConfig(
+            modeId = modeId,
+            teamSize = f[0].toInt(),
+            teamCount = f[1].toInt(),
+            ranked = f[2].toBoolean(),
+            band =
+                BandConfig(
+                    b0 = f[3].toDouble(),
+                    k = f[4].toDouble(),
+                    w = f[5].toDouble(),
+                    stepSeconds = f[6].toInt(),
+                    mercySeconds = f[7].toInt(),
+                    mutualSeconds = f[8].toInt(),
+                ),
+        )
+    }
+
     private val hashes: HashCommands<String, String, String> by lazy {
         redis.hash(String::class.java, String::class.java, String::class.java)
     }
@@ -207,6 +260,9 @@ class ValkeyQueue @Inject constructor(private val redis: RedisDataSource) {
 
         /** Matches that exist but no server has taken yet — the watchdog's worklist. */
         const val LIVE_MATCHES = "mm:matches:live"
+
+        /** Every mode this matchmaker knows about, so a restart does not silently drop a queue. */
+        const val MODES_KEY = "mm:modes"
 
         fun guardKey(playerId: String) = "mm:player:$playerId"
 
