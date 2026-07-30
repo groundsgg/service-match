@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/groundsgg/service-match/compare/v0.4.0...v0.5.0) (2026-07-30)
+
+
+### Features
+
+* **match:** make duel a ranked mode ([#27](https://github.com/groundsgg/service-match/issues/27)) ([53a370e](https://github.com/groundsgg/service-match/commit/53a370ed057418e3e3419ce4c9f3f289d75758f7))
+
 ## [0.4.0](https://github.com/groundsgg/service-match/compare/v0.3.2...v0.4.0) (2026-07-30)
 
 
