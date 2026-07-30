@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/groundsgg/service-match/compare/v0.3.2...v0.4.0) (2026-07-30)
+
+
+### Features
+
+* **metrics:** expose matchmaking metrics on /q/metrics ([#25](https://github.com/groundsgg/service-match/issues/25)) ([8138d03](https://github.com/groundsgg/service-match/commit/8138d032a4b9a62b888e2b181f2722168fbb4676))
+
 ## [0.3.2](https://github.com/groundsgg/service-match/compare/v0.3.1...v0.3.2) (2026-07-14)
 
 
