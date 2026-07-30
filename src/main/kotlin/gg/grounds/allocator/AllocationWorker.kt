@@ -1,6 +1,7 @@
 package gg.grounds.allocator
 
 import gg.grounds.matcher.ModeRegistry
+import gg.grounds.metrics.MatchMetrics
 import gg.grounds.persistence.ValkeyQueue
 import io.quarkus.redis.datasource.RedisDataSource
 import io.quarkus.scheduler.Scheduled
@@ -31,6 +32,7 @@ constructor(
     private val agones: AgonesAllocator,
     private val matchHost: MatchHostClient,
     private val modes: ModeRegistry,
+    private val metrics: MatchMetrics,
     @param:ConfigProperty(name = "grounds.match.alloc.lease-ms") private val leaseMs: Long,
     @param:ConfigProperty(name = "grounds.match.alloc.max-attempts") private val maxAttempts: Int,
     @param:ConfigProperty(name = "grounds.match.alloc.idle-reclaim-ms")
@@ -133,7 +135,10 @@ constructor(
         }
 
         try {
-            allocateOne(matchId, modeId, entryId)
+            // Time the attempt and record which branch it took. The outcome
+            // label is the point: "formed but never started" is only useful if
+            // it also says why — no server, a refusal, an exhausted retry.
+            metrics.timeAllocation(modeId) { allocateOne(matchId, modeId, entryId) }
         } catch (e: Exception) {
             log.error("Allocation failed (match=$matchId)", e)
             // Leave it unacknowledged: XAUTOCLAIM will bring it back. If it keeps
@@ -141,13 +146,13 @@ constructor(
         }
     }
 
-    private fun allocateOne(matchId: String, modeId: String, entryId: String) {
+    private fun allocateOne(matchId: String, modeId: String, entryId: String): String {
         val mode = modes.find(modeId)
         if (mode == null) {
             log.warn("Match references an unknown mode, dropping (match=$matchId, mode=$modeId)")
             queue.failRequeue(matchId, modeId)
             ack(entryId)
-            return
+            return "unknown_mode"
         }
 
         // Fence concurrent attempts. This does not make allocation idempotent —
@@ -156,14 +161,14 @@ constructor(
         val gotLease = redis.execute("SET", leaseKey, consumerName, "NX", "PX", leaseMs.toString())
         if (gotLease == null) {
             log.debug("Another worker holds the lease (match=$matchId)")
-            return // no ack: whoever holds it will finish, or it expires and we retry
+            return "lease_held" // no ack: whoever holds it will finish, or it expires and we retry
         }
 
         val attempts =
             redis.execute("HINCRBY", ValkeyQueue.matchKey(matchId), "attempts", "1").toInteger()
         if (attempts > maxAttempts) {
             giveUp(matchId, modeId, entryId, "exceeded $maxAttempts allocation attempts")
-            return
+            return "gave_up"
         }
 
         val fleet = fleetNameFor(mode.modeId)
@@ -176,7 +181,7 @@ constructor(
             log.warn("No server available, requeueing players (match=$matchId, fleet=$fleet)")
             queue.failRequeue(matchId, modeId)
             ack(entryId)
-            return
+            return "no_server"
         }
 
         // Tell the server the match is coming, and do it BEFORE the assign.
@@ -201,7 +206,7 @@ constructor(
             // sync reclaims it — far cheaper than players stuck in a dead match.
             queue.failRequeue(matchId, modeId)
             ack(entryId)
-            return
+            return "server_refused"
         }
 
         val won = queue.assign(matchId, server)
@@ -221,6 +226,7 @@ constructor(
             )
         }
         ack(entryId)
+        return if (won) "assigned" else "lost_race"
     }
 
     private fun giveUp(matchId: String, modeId: String, entryId: String, reason: String) {

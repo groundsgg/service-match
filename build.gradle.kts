@@ -50,6 +50,13 @@ dependencies {
     // to Alloy. Auto-wired via @WithSpan on @Blocking methods and the
     // built-in gRPC server interceptor.
     implementation("io.quarkus:quarkus-opentelemetry")
+    // Micrometer + Prometheus registry — exposes /q/metrics on the same 9000
+    // port as gRPC. Tracing (above) answers "what happened in this one call";
+    // this answers "how is the queue doing right now" — depth, throughput, and
+    // whether formed matches are actually reaching a server. The satellite's
+    // Alloy scrapes the endpoint and ships it to core's Mimir under the
+    // region's tenant. Brings the JVM and system binders for free.
+    implementation("io.quarkus:quarkus-micrometer-registry-prometheus")
     implementation("gg.grounds:library-grpc-contracts-match:main-SNAPSHOT")
     // service-leaderboard is the writer target for a rated result's post-match
     // conservative skill; service-match is the only caller, forge never wires

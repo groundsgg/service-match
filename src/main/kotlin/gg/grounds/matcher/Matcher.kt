@@ -5,6 +5,7 @@ import gg.grounds.domain.MatchFunction
 import gg.grounds.domain.MatchRecordRepository
 import gg.grounds.domain.ModeConfig
 import gg.grounds.domain.Ticket
+import gg.grounds.metrics.MatchMetrics
 import gg.grounds.persistence.ValkeyQueue
 import io.quarkus.scheduler.Scheduled
 import jakarta.enterprise.context.ApplicationScoped
@@ -32,6 +33,7 @@ constructor(
     private val queue: ValkeyQueue,
     private val modes: ModeRegistry,
     private val matches: MatchRecordRepository,
+    private val metrics: MatchMetrics,
     @param:ConfigProperty(name = "grounds.match.ticket.ttl-seconds") private val ticketTtl: Long,
     @param:ConfigProperty(name = "grounds.match.match.ttl-seconds") private val matchTtl: Long,
 ) {
@@ -44,7 +46,7 @@ constructor(
     fun tick() {
         for (mode in modes.all()) {
             try {
-                tickMode(mode)
+                metrics.timeTick(mode.modeId) { tickMode(mode) }
             } catch (e: Exception) {
                 log.error("Queue tick failed (mode=${mode.modeId})", e)
             }
@@ -53,6 +55,11 @@ constructor(
 
     /** Visible for testing — runs one pass over one mode. */
     fun tickMode(mode: ModeConfig, now: Instant = Instant.now()): Int {
+        // Register the depth gauge for this mode the first time it ticks — the
+        // matcher sees every known mode every pass, so nothing has to remember
+        // to do it on the write path.
+        metrics.ensureQueueDepthGauge(mode.modeId) { queue.queueDepth(mode.modeId) }
+
         val needed = mode.playersPerMatch
         // Cheap early out: most ticks on most modes have nobody waiting.
         if (queue.queueDepth(mode.modeId) < needed) return 0
@@ -75,6 +82,7 @@ constructor(
                 )
             if (won) {
                 committed++
+                metrics.matchFormed(mode.modeId, proposal.ticketIds.size)
                 recordDurably(proposal, mode, tickets)
                 log.info(
                     "Formed match (id=${proposal.matchId}, mode=${mode.modeId}, " +
