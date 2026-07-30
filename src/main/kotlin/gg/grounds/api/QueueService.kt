@@ -5,6 +5,7 @@ import gg.grounds.domain.Rating
 import gg.grounds.domain.RatingRepository
 import gg.grounds.domain.Ticket
 import gg.grounds.matcher.ModeRegistry
+import gg.grounds.metrics.MatchMetrics
 import gg.grounds.persistence.ValkeyQueue
 import jakarta.enterprise.context.ApplicationScoped
 import jakarta.inject.Inject
@@ -31,6 +32,7 @@ constructor(
     private val queue: ValkeyQueue,
     private val modes: ModeRegistry,
     private val ratings: RatingRepository,
+    private val metrics: MatchMetrics,
     @param:ConfigProperty(name = "grounds.match.ticket.ttl-seconds") private val ticketTtl: Long,
     @param:ConfigProperty(name = "grounds.match.rating.default-mu") private val defaultMu: Double,
     @param:ConfigProperty(name = "grounds.match.rating.default-sigma")
@@ -58,6 +60,7 @@ constructor(
         if (!queue.enqueue(ticket, ticketTtl)) {
             throw AlreadyQueuedException()
         }
+        metrics.ticketEnqueued(mode.modeId)
         return ticket
     }
 
