@@ -44,7 +44,7 @@ class ModeRegistry @Inject constructor(private val persistence: ValkeyQueue) {
                 modeId = "duel",
                 teamSize = 1,
                 teamCount = 2,
-                ranked = false,
+                ranked = true,
                 band = BandConfig(),
             )
         )
