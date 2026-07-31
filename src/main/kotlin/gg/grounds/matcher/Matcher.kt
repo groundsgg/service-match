@@ -116,10 +116,23 @@ constructor(
                 proposal.ticketIds.mapNotNull { id ->
                     byId[id]?.playerId?.let { java.util.UUID.fromString(it) }
                 }
+            // One provisional ticket unranks the whole match. Its mu/sigma are
+            // the seeded defaults because the rating store would not answer, not
+            // because the player is new — rating the result from that prior would
+            // move a real rating on a fiction. Unranking is per match rather than
+            // per player because the update is joint: every placement in a
+            // Plackett-Luce update is computed against the others.
+            val provisional = proposal.ticketIds.any { byId[it]?.provisional == true }
+            if (provisional) {
+                log.warn(
+                    "Recording match unranked — a ticket was seeded with default " +
+                        "ratings because the store was unreachable (id=${proposal.matchId})"
+                )
+            }
             matches.recordMatch(
                 matchId = java.util.UUID.fromString(proposal.matchId),
                 modeId = mode.modeId,
-                ranked = mode.ranked,
+                ranked = mode.ranked && !provisional,
                 playerIds = playerIds,
             )
         } catch (e: Exception) {
