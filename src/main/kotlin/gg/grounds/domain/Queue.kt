@@ -16,6 +16,15 @@ data class Ticket(
     val mu: Double,
     val sigma: Double,
     val enqueuedAt: Instant,
+    /**
+     * True when mu/sigma are the seeded defaults because the rating store could not be read, not
+     * because this player is genuinely unrated.
+     *
+     * The difference matters at rating time, not at matching time: treating a settled player as
+     * mu=25 and then updating from that prior would move their rating on a fiction. A match holding
+     * any provisional ticket is therefore recorded unranked.
+     */
+    val provisional: Boolean = false,
     val state: TicketState = TicketState.QUEUED,
     val matchId: String? = null,
     val assignment: ServerAssignment? = null,

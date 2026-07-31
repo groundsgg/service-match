@@ -12,6 +12,7 @@ import jakarta.inject.Inject
 import java.time.Instant
 import java.util.UUID
 import org.eclipse.microprofile.config.inject.ConfigProperty
+import org.jboss.logging.Logger
 
 /** Raised when a player already holds a live ticket. */
 class AlreadyQueuedException : RuntimeException("player already holds a live ticket")
@@ -44,7 +45,36 @@ constructor(
 
         // Read the rating once, here, and carry it on the ticket. The matcher
         // then works purely from Valkey.
-        val stored = ratings.find(playerId, mode.modeId)
+        //
+        // A store that will not answer must not stop someone queueing. The
+        // codebase already takes that position on the write side — "players
+        // would rather play an unrated game than no game" (Matcher) — and the
+        // read side had the opposite behaviour: an exception here refused the
+        // enqueue outright, so a database blip locked every player out of every
+        // queue.
+        //
+        // Failing open costs something, and the ticket records it. Matching a
+        // settled player as mu=25 is fine — the band is wide and the worst case
+        // is one lopsided game — but *rating* from that prior would move their
+        // real rating on a fiction. So the ticket is marked provisional and the
+        // match it forms is recorded unranked.
+        //
+        // A genuinely unrated player (find returns null) is NOT provisional: the
+        // defaults are the right answer for them, not a fallback.
+        var provisional = false
+        val stored =
+            try {
+                ratings.find(playerId, mode.modeId)
+            } catch (e: Exception) {
+                provisional = true
+                metrics.ratingLookupDegraded(mode.modeId)
+                log.warn(
+                    "Rating store unreachable; queueing with seeded defaults and " +
+                        "the match will be unranked (player=$playerId, mode=${mode.modeId})",
+                    e,
+                )
+                null
+            }
         val rating = stored?.rating ?: Rating(defaultMu, defaultSigma)
 
         val ticket =
@@ -55,6 +85,7 @@ constructor(
                 mu = rating.mu,
                 sigma = rating.sigma,
                 enqueuedAt = Instant.now(),
+                provisional = provisional,
             )
 
         if (!queue.enqueue(ticket, ticketTtl)) {
@@ -84,5 +115,9 @@ constructor(
     fun upsertMode(config: ModeConfig): Boolean {
         queue.saveMode(config)
         return modes.upsert(config)
+    }
+
+    companion object {
+        private val log: Logger = Logger.getLogger(QueueService::class.java)
     }
 }

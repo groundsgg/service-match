@@ -41,6 +41,16 @@ class MatchMetrics @Inject constructor(private val registry: MeterRegistry) {
         registry.counter("match.tickets.enqueued", "mode", mode).increment()
     }
 
+    /**
+     * The rating store could not be read, so a ticket was seeded with defaults.
+     *
+     * Worth alerting on rather than merely counting: every match formed while this is non-zero is
+     * unranked, so a long outage quietly stops the ladder moving.
+     */
+    fun ratingLookupDegraded(mode: String) {
+        registry.counter("match.rating.lookup.degraded", "mode", mode).increment()
+    }
+
     /** A match was claimed: one match, and the players it took. */
     fun matchFormed(mode: String, players: Int) {
         registry.counter("match.formed", "mode", mode).increment()

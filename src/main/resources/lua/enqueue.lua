@@ -1,4 +1,4 @@
--- enqueue(ticketId, playerId, modeId, mu, sigma, nowMs, ttlSeconds) -> 1 | 0
+-- enqueue(ticketId, playerId, modeId, mu, sigma, nowMs, ttlSeconds, provisional) -> 1 | 0
 --
 -- Puts a player in a queue. Returns 0 if they already hold a live ticket.
 --
@@ -27,6 +27,10 @@ local mu        = tonumber(ARGV[4])
 local sigma     = tonumber(ARGV[5])
 local nowMs     = tonumber(ARGV[6])
 local ttl       = tonumber(ARGV[7])
+-- '1' when the rating store could not be read and mu/sigma are the defaults
+-- rather than this player's. Carried on the ticket so the match it forms can
+-- be recorded unranked — see Matcher.recordDurably.
+local provisional = ARGV[8]
 
 local existing = redis.call('GET', guardKey)
 if existing then
@@ -47,6 +51,7 @@ redis.call('HSET', ticketKey,
   'mu',          tostring(mu),
   'sigma',       tostring(sigma),
   'enqueuedAt',  tostring(nowMs),
+  'provisional', provisional,
   'state',       'QUEUED')
 redis.call('EXPIRE', ticketKey, ttl)
 

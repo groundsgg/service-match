@@ -76,6 +76,7 @@ class ValkeyQueue @Inject constructor(private val redis: RedisDataSource) {
                     ticket.sigma.toString(),
                     ticket.enqueuedAt.toEpochMilli().toString(),
                     ttlSeconds.toString(),
+                    if (ticket.provisional) "1" else "0",
                 ),
         ) == 1L
 
@@ -157,6 +158,9 @@ class ValkeyQueue @Inject constructor(private val redis: RedisDataSource) {
             mu = h.getValue("mu").toDouble(),
             sigma = h.getValue("sigma").toDouble(),
             enqueuedAt = Instant.ofEpochMilli(h.getValue("enqueuedAt").toLong()),
+            // Absent on tickets written before the flag existed; those pre-date the
+            // degraded path entirely, so "not provisional" is the correct reading.
+            provisional = h["provisional"] == "1",
             state = TicketState.valueOf(h.getValue("state")),
             matchId = h["matchId"],
             assignment =
