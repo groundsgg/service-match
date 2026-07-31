@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/groundsgg/service-match/compare/v0.5.0...v0.6.0) (2026-07-31)
+
+
+### Features
+
+* **queue:** let players queue when the rating store is unreachable ([#29](https://github.com/groundsgg/service-match/issues/29)) ([b24bb4d](https://github.com/groundsgg/service-match/commit/b24bb4d0e89ad93a3b48ba06396efe44ec1d262a))
+
 ## [0.5.0](https://github.com/groundsgg/service-match/compare/v0.4.0...v0.5.0) (2026-07-30)
 
 
