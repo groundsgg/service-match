@@ -48,6 +48,7 @@ class ValkeyQueueIT {
         mu: Double = 25.0,
         waitedSeconds: Long = 0,
         mode: String = "duel",
+        location: String = REGION,
     ) =
         Ticket(
             id = UUID.randomUUID().toString(),
@@ -56,6 +57,7 @@ class ValkeyQueueIT {
             mu = mu,
             sigma = 8.33,
             enqueuedAt = Instant.now().minusSeconds(waitedSeconds),
+            location = location,
         )
 
     @Test
@@ -98,7 +100,7 @@ class ValkeyQueueIT {
         queue.enqueue(b, TTL)
 
         val matchId = UUID.randomUUID().toString()
-        assertTrue(queue.claim(matchId, "duel", listOf(a.id, b.id), 1, Instant.now(), TTL))
+        assertTrue(queue.claim(matchId, "duel", listOf(a.id, b.id), 1, REGION, Instant.now(), TTL))
 
         assertEquals(TicketState.MATCHED, queue.findTicket(a.id)?.state)
         assertEquals(matchId, queue.findTicket(a.id)?.matchId)
@@ -118,6 +120,7 @@ class ValkeyQueueIT {
                 "duel",
                 listOf(a.id, b.id),
                 1,
+                REGION,
                 Instant.now(),
                 TTL,
             )
@@ -131,11 +134,83 @@ class ValkeyQueueIT {
                 "duel",
                 listOf(a.id, b.id),
                 1,
+                REGION,
                 Instant.now(),
                 TTL,
             ),
             "a ticket must never be committed to two matches",
         )
+    }
+
+    @Test
+    fun `players in different regions share one queue and one match`() {
+        // The whole point of the cross-region queue: two players who would never
+        // have met before, because each region held its own queue.
+        val ams = ticket("p1", location = "nl-ams1")
+        val fra = ticket("p2", location = "de-fra1")
+        queue.enqueue(ams, TTL)
+        queue.enqueue(fra, TTL)
+
+        val matchId = UUID.randomUUID().toString()
+        assertTrue(
+            queue.claim(matchId, "duel", listOf(ams.id, fra.id), 1, "nl-ams1", Instant.now(), TTL)
+        )
+
+        assertEquals("nl-ams1", matchField(matchId, "target"))
+        assertEquals(
+            "de-fra1",
+            queue.findTicket(fra.id)!!.location,
+            "the location must survive a round trip",
+        )
+    }
+
+    @Test
+    fun `the allocation entry goes only to the host region's stream`() {
+        // If it landed on a shared stream, whichever region's allocator polled
+        // first would try to allocate — in its own Agones cluster, which is not
+        // where the players are meant to play.
+        val a = ticket("p1", location = "de-fra1")
+        val b = ticket("p2", location = "de-fra1")
+        queue.enqueue(a, TTL)
+        queue.enqueue(b, TTL)
+
+        queue.claim(
+            UUID.randomUUID().toString(),
+            "duel",
+            listOf(a.id, b.id),
+            1,
+            "de-fra1",
+            Instant.now(),
+            TTL,
+        )
+
+        assertEquals(1L, redis.execute("XLEN", ValkeyQueue.allocStream("de-fra1")).toLong())
+        assertEquals(
+            0L,
+            redis.execute("XLEN", ValkeyQueue.allocStream("nl-ams1")).toLong(),
+            "another region's allocator must never see this match",
+        )
+    }
+
+    @Test
+    fun `the snapshot returns every waiting ticket in one call, oldest first`() {
+        val old = ticket("p1", waitedSeconds = 60, location = "de-fra1")
+        val young = ticket("p2", waitedSeconds = 1, location = "nl-ams1")
+        queue.enqueue(young, TTL)
+        queue.enqueue(old, TTL)
+
+        val snap = queue.snapshot("duel", 200)
+
+        assertEquals(listOf(old.id, young.id), snap.map { it.id }, "longest waiting first")
+        assertEquals(listOf("de-fra1", "nl-ams1"), snap.map { it.location })
+        assertEquals(TicketState.QUEUED, snap.first().state)
+    }
+
+    @Test
+    fun `the snapshot honours its limit`() {
+        repeat(5) { queue.enqueue(ticket("p$it", waitedSeconds = (10 - it).toLong()), TTL) }
+
+        assertEquals(3, queue.snapshot("duel", 3).size)
     }
 
     @Test
@@ -152,6 +227,7 @@ class ValkeyQueueIT {
                 "duel",
                 listOf(a.id, b.id),
                 1,
+                REGION,
                 Instant.now(),
                 TTL,
             ),
@@ -166,7 +242,7 @@ class ValkeyQueueIT {
         queue.enqueue(a, TTL)
         queue.enqueue(b, TTL)
         val matchId = UUID.randomUUID().toString()
-        queue.claim(matchId, "duel", listOf(a.id, b.id), 1, Instant.now(), TTL)
+        queue.claim(matchId, "duel", listOf(a.id, b.id), 1, REGION, Instant.now(), TTL)
 
         assertTrue(queue.assign(matchId, ServerAssignment("gs-a", "10.0.0.1", 25565)))
         assertFalse(
@@ -186,7 +262,7 @@ class ValkeyQueueIT {
         queue.enqueue(a, TTL)
         queue.enqueue(b, TTL)
         val matchId = UUID.randomUUID().toString()
-        queue.claim(matchId, "duel", listOf(a.id, b.id), 1, Instant.now(), TTL)
+        queue.claim(matchId, "duel", listOf(a.id, b.id), 1, REGION, Instant.now(), TTL)
         queue.assign(matchId, ServerAssignment("gs", "10.0.0.1", 25565))
 
         assertEquals(TicketState.ASSIGNED, queue.findTicket(a.id)?.state)
@@ -207,7 +283,7 @@ class ValkeyQueueIT {
         val enqueuedAtBefore = queue.findTicket(a.id)!!.enqueuedAt
 
         val matchId = UUID.randomUUID().toString()
-        queue.claim(matchId, "duel", listOf(a.id, b.id), 1, Instant.now(), TTL)
+        queue.claim(matchId, "duel", listOf(a.id, b.id), 1, REGION, Instant.now(), TTL)
 
         assertEquals(2, queue.failRequeue(matchId, "duel"))
 
@@ -229,7 +305,7 @@ class ValkeyQueueIT {
         queue.enqueue(a, TTL)
         queue.enqueue(b, TTL)
         val matchId = UUID.randomUUID().toString()
-        queue.claim(matchId, "duel", listOf(a.id, b.id), 1, Instant.now(), TTL)
+        queue.claim(matchId, "duel", listOf(a.id, b.id), 1, REGION, Instant.now(), TTL)
         queue.assign(matchId, ServerAssignment("gs", "10.0.0.1", 25565))
 
         // The players may already be on the server. Pulling them back into the
@@ -246,11 +322,11 @@ class ValkeyQueueIT {
         queue.enqueue(b, TTL)
 
         val matchId = UUID.randomUUID().toString()
-        queue.claim(matchId, "duel", listOf(a.id, b.id), 1, Instant.now(), TTL)
+        queue.claim(matchId, "duel", listOf(a.id, b.id), 1, REGION, Instant.now(), TTL)
 
         // The XADD is inside the claim script on purpose: a match that exists but
         // was never queued for allocation would be a match nobody ever plays.
-        val len = redis.execute("XLEN", ValkeyQueue.ALLOC_STREAM).toLong()
+        val len = redis.execute("XLEN", ValkeyQueue.allocStream(REGION)).toLong()
         assertEquals(1L, len)
     }
 
@@ -268,7 +344,7 @@ class ValkeyQueueIT {
         queue.enqueue(b, TTL)
 
         val matchId = UUID.randomUUID().toString()
-        queue.claim(matchId, "duel", listOf(a.id, b.id), 1, Instant.now(), TTL)
+        queue.claim(matchId, "duel", listOf(a.id, b.id), 1, REGION, Instant.now(), TTL)
 
         // A match exists the moment it is claimed, but no server has it yet. If it
         // were not tracked from here, an allocation lost on the way would leave the
@@ -284,7 +360,7 @@ class ValkeyQueueIT {
         queue.enqueue(a, TTL)
         queue.enqueue(b, TTL)
         val matchId = UUID.randomUUID().toString()
-        queue.claim(matchId, "duel", listOf(a.id, b.id), 1, Instant.now(), TTL)
+        queue.claim(matchId, "duel", listOf(a.id, b.id), 1, REGION, Instant.now(), TTL)
 
         queue.assign(matchId, ServerAssignment("gs", "10.0.0.1", 25565))
 
@@ -300,7 +376,7 @@ class ValkeyQueueIT {
         queue.enqueue(a, TTL)
         queue.enqueue(b, TTL)
         val matchId = UUID.randomUUID().toString()
-        queue.claim(matchId, "duel", listOf(a.id, b.id), 1, Instant.now(), TTL)
+        queue.claim(matchId, "duel", listOf(a.id, b.id), 1, REGION, Instant.now(), TTL)
 
         queue.failRequeue(matchId, "duel")
 
@@ -320,7 +396,7 @@ class ValkeyQueueIT {
 
         val matchId = UUID.randomUUID().toString()
         // teamSize 2 → [a,b] against [c,d].
-        queue.claim(matchId, "duel", listOf(a.id, b.id, c.id, d.id), 2, Instant.now(), TTL)
+        queue.claim(matchId, "duel", listOf(a.id, b.id, c.id, d.id), 2, REGION, Instant.now(), TTL)
 
         // The claim script stores TICKETS; the server deals in players, and it must
         // get the teams exactly as they were drafted — a server that re-shuffled
@@ -333,10 +409,14 @@ class ValkeyQueueIT {
         assertEquals(emptyList<List<String>>(), queue.matchTeams("does-not-exist"))
     }
 
+    private fun matchField(matchId: String, field: String): String? =
+        redis.execute("HGET", "mm:match:$matchId", field)?.toString()
+
     private fun isLive(matchId: String): Boolean =
         redis.execute("SISMEMBER", ValkeyQueue.LIVE_MATCHES, matchId).toLong() == 1L
 
     companion object {
+        private const val REGION = "nl-ams1"
         private const val TTL = 3600L
     }
 

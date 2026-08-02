@@ -8,6 +8,7 @@ import gg.grounds.domain.TicketState
 import io.quarkus.redis.datasource.RedisDataSource
 import io.quarkus.redis.datasource.hash.HashCommands
 import io.quarkus.redis.datasource.sortedset.SortedSetCommands
+import io.vertx.mutiny.redis.client.Response
 import jakarta.annotation.PostConstruct
 import jakarta.enterprise.context.ApplicationScoped
 import jakarta.inject.Inject
@@ -56,6 +57,16 @@ class ValkeyQueue @Inject constructor(private val redis: RedisDataSource) {
         return redis.execute("EVALSHA", *argv.toTypedArray()).toLong()
     }
 
+    private fun evalRaw(script: String, keys: List<String>, args: List<String>): Response {
+        val argv = buildList {
+            add(shas.getValue(script))
+            add(keys.size.toString())
+            addAll(keys)
+            addAll(args)
+        }
+        return redis.execute("EVALSHA", *argv.toTypedArray())
+    }
+
     /** @return false if the player already holds a live ticket. */
     fun enqueue(ticket: Ticket, ttlSeconds: Long): Boolean =
         eval(
@@ -77,6 +88,7 @@ class ValkeyQueue @Inject constructor(private val redis: RedisDataSource) {
                     ticket.enqueuedAt.toEpochMilli().toString(),
                     ttlSeconds.toString(),
                     if (ticket.provisional) "1" else "0",
+                    ticket.location,
                 ),
         ) == 1L
 
@@ -90,6 +102,7 @@ class ValkeyQueue @Inject constructor(private val redis: RedisDataSource) {
         modeId: String,
         ticketIds: List<String>,
         teamSize: Int,
+        target: String,
         now: Instant,
         matchTtlSeconds: Long,
     ): Boolean =
@@ -110,6 +123,7 @@ class ValkeyQueue @Inject constructor(private val redis: RedisDataSource) {
                     add(now.toEpochMilli().toString())
                     add(matchTtlSeconds.toString())
                     add(teamSize.toString())
+                    add(target)
                     addAll(ticketIds)
                 },
         ) == 1L
@@ -145,8 +159,9 @@ class ValkeyQueue @Inject constructor(private val redis: RedisDataSource) {
             args = listOf(matchId),
         )
 
-    fun findTicket(id: String): Ticket? {
-        val h: Map<String, String> = hashes.hgetall(ticketKey(id))
+    fun findTicket(id: String): Ticket? = toTicket(hashes.hgetall(ticketKey(id)))
+
+    private fun toTicket(h: Map<String, String>): Ticket? {
         if (h.isEmpty()) return null
         val address = h["address"]
         val port = h["port"]?.toIntOrNull()
@@ -161,6 +176,7 @@ class ValkeyQueue @Inject constructor(private val redis: RedisDataSource) {
             // Absent on tickets written before the flag existed; those pre-date the
             // degraded path entirely, so "not provisional" is the correct reading.
             provisional = h["provisional"] == "1",
+            location = h["location"].orEmpty(),
             state = TicketState.valueOf(h.getValue("state")),
             matchId = h["matchId"],
             assignment =
@@ -194,6 +210,23 @@ class ValkeyQueue @Inject constructor(private val redis: RedisDataSource) {
     /** Tickets waiting in a mode, oldest first. The oldest is the matcher's anchor. */
     fun queuedTicketIdsByWait(modeId: String, limit: Int): List<String> =
         sortedSets.zrange(waitKey(modeId), 0, (limit - 1).toLong())
+
+    /**
+     * The matcher's whole read of a mode, in one round trip.
+     *
+     * Reading the index and then each ticket separately costs a round trip per waiting player,
+     * which was invisible while Valkey sat in the same namespace and is not once the queue is
+     * shared across regions. See `lua/snapshot.lua`.
+     */
+    fun snapshot(modeId: String, limit: Int): List<Ticket> {
+        val reply =
+            evalRaw("snapshot", keys = listOf(waitKey(modeId)), args = listOf(limit.toString()))
+        return reply.mapNotNull { entry ->
+            // Flat [field, value, field, value, ...], as HGETALL returns it.
+            val fields = entry.map { it.toString() }
+            toTicket(fields.chunked(2).filter { it.size == 2 }.associate { it[0] to it[1] })
+        }
+    }
 
     fun queueDepth(modeId: String): Long = sortedSets.zcard(ratingKey(modeId))
 
@@ -258,9 +291,17 @@ class ValkeyQueue @Inject constructor(private val redis: RedisDataSource) {
 
     companion object {
         private val log: Logger = Logger.getLogger(ValkeyQueue::class.java)
-        private val SCRIPTS = listOf("enqueue", "claim", "assign", "cancel", "fail_requeue")
+        private val SCRIPTS =
+            listOf("enqueue", "claim", "assign", "cancel", "fail_requeue", "snapshot")
 
+        /**
+         * Base name of the allocation stream. Never read directly — allocation is per region, so
+         * the real key is [allocStream] of the region that is to host. Keeping the base separate is
+         * what stops a matcher in one region from allocating a match meant for another.
+         */
         const val ALLOC_STREAM = "mm:alloc"
+
+        fun allocStream(region: String): String = "$ALLOC_STREAM:$region"
 
         /** Matches that exist but no server has taken yet — the watchdog's worklist. */
         const val LIVE_MATCHES = "mm:matches:live"

@@ -138,7 +138,7 @@ class StaleMatchWatchdogIT {
 
     private fun claim(a: Ticket, b: Ticket, at: Instant): String {
         val matchId = UUID.randomUUID().toString()
-        queue.claim(matchId, "duel", listOf(a.id, b.id), 1, at, TTL)
+        queue.claim(matchId, "duel", listOf(a.id, b.id), 1, REGION, at, TTL)
         return matchId
     }
 
@@ -159,6 +159,7 @@ class StaleMatchWatchdogIT {
         )
 
     companion object {
+        private const val REGION = "nl-ams1"
         private const val TTL = 3600L
     }
 }

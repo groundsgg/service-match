@@ -36,6 +36,7 @@ constructor(
     private val metrics: MatchMetrics,
     @param:ConfigProperty(name = "grounds.match.ticket.ttl-seconds") private val ticketTtl: Long,
     @param:ConfigProperty(name = "grounds.match.match.ttl-seconds") private val matchTtl: Long,
+    @param:ConfigProperty(name = "grounds.match.region") private val region: String,
 ) {
     private val matchFunction: MatchFunction = BandedMmrMatchFunction()
 
@@ -68,15 +69,25 @@ constructor(
         if (tickets.size < needed) return 0
 
         val proposals = matchFunction.propose(mode, tickets, now)
+        val byId = tickets.associateBy { it.id }
         var committed = 0
 
         for (proposal in proposals) {
+            // Where it gets played, decided here rather than in the allocator:
+            // the claim has to record it atomically with the match, or a retry
+            // could pick a different region than the first attempt did.
+            val target =
+                HostRegionPolicy.choose(
+                    proposal.ticketIds.mapNotNull { byId[it] },
+                    fallback = region,
+                )
             val won =
                 queue.claim(
                     matchId = proposal.matchId,
                     modeId = mode.modeId,
                     ticketIds = proposal.ticketIds,
                     teamSize = mode.teamSize,
+                    target = target,
                     now = now,
                     matchTtlSeconds = matchTtl,
                 )
@@ -86,7 +97,8 @@ constructor(
                 recordDurably(proposal, mode, tickets)
                 log.info(
                     "Formed match (id=${proposal.matchId}, mode=${mode.modeId}, " +
-                        "players=${proposal.ticketIds.size}, spread=${"%.2f".format(proposal.quality)})"
+                        "players=${proposal.ticketIds.size}, host=$target, " +
+                        "spread=${"%.2f".format(proposal.quality)})"
                 )
             } else {
                 // Someone else took a ticket, or a player cancelled. The next
@@ -144,7 +156,7 @@ constructor(
     }
 
     private fun snapshot(mode: ModeConfig): List<Ticket> =
-        queue.queuedTicketIdsByWait(mode.modeId, SNAPSHOT_LIMIT).mapNotNull { queue.findTicket(it) }
+        queue.snapshot(mode.modeId, SNAPSHOT_LIMIT)
 
     companion object {
         private val log: Logger = Logger.getLogger(Matcher::class.java)

@@ -1,4 +1,4 @@
--- enqueue(ticketId, playerId, modeId, mu, sigma, nowMs, ttlSeconds, provisional) -> 1 | 0
+-- enqueue(ticketId, playerId, modeId, mu, sigma, nowMs, ttlSeconds, provisional, location) -> 1 | 0
 --
 -- Puts a player in a queue. Returns 0 if they already hold a live ticket.
 --
@@ -31,6 +31,11 @@ local ttl       = tonumber(ARGV[7])
 -- rather than this player's. Carried on the ticket so the match it forms can
 -- be recorded unranked — see Matcher.recordDurably.
 local provisional = ARGV[8]
+-- Where this player is connected. A QoS hint, never a queue dimension: the
+-- queue spans every region on the continent so that two players in different
+-- ones can meet at all. The claim reads these to decide where the match is
+-- hosted.
+local location = ARGV[9]
 
 local existing = redis.call('GET', guardKey)
 if existing then
@@ -52,6 +57,7 @@ redis.call('HSET', ticketKey,
   'sigma',       tostring(sigma),
   'enqueuedAt',  tostring(nowMs),
   'provisional', provisional,
+  'location',    location,
   'state',       'QUEUED')
 redis.call('EXPIRE', ticketKey, ttl)
 
