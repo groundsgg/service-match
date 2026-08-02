@@ -31,8 +31,8 @@ import org.mockito.kotlin.whenever
  * rating on a fiction, and nothing later would tell you it happened.
  */
 @QuarkusTest
-@QuarkusTestResource(ValkeyQueueIT.PostgresResource::class)
-@QuarkusTestResource(ValkeyQueueIT.ValkeyResource::class)
+@QuarkusTestResource(ValkeyQueueIT.PostgresResource::class, restrictToAnnotatedClass = true)
+@QuarkusTestResource(ValkeyQueueIT.ValkeyResource::class, restrictToAnnotatedClass = true)
 class QueueServiceDegradedRatingTest {
 
     @Inject lateinit var queueService: QueueService

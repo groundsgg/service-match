@@ -29,8 +29,8 @@ import org.testcontainers.utility.DockerImageName
  * Valkey here would test nothing that matters.
  */
 @QuarkusTest
-@QuarkusTestResource(ValkeyQueueIT.ValkeyResource::class)
-@QuarkusTestResource(ValkeyQueueIT.PostgresResource::class)
+@QuarkusTestResource(ValkeyQueueIT.ValkeyResource::class, restrictToAnnotatedClass = true)
+@QuarkusTestResource(ValkeyQueueIT.PostgresResource::class, restrictToAnnotatedClass = true)
 class ValkeyQueueIT {
 
     @Inject lateinit var queue: ValkeyQueue
@@ -451,6 +451,16 @@ class ValkeyQueueIT {
     }
 
     /** A real Valkey. The Lua is the thing under test; a fake would prove nothing. */
+    /**
+     * Shared by several test classes, and restricted at every one of them.
+     *
+     * A Quarkus test resource is global by default: annotate it anywhere and it starts for the
+     * whole run, whether or not the class that declares it is being executed. Two resources that
+     * both set `quarkus.datasource.jdbc.url` then race, and the loser's container sits there unused
+     * while its tests quietly talk to the winner's. That is how a benchmark measuring a *proxied*
+     * database ended up measuring an unproxied one and reporting latency figures that were simply
+     * the local ones.
+     */
     class ValkeyResource : QuarkusTestResourceLifecycleManager {
         private lateinit var container: GenericContainer<*>
 

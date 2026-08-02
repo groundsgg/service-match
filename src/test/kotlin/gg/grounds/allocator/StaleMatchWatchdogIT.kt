@@ -30,8 +30,8 @@ import org.junit.jupiter.api.Test
  * `createdAt` the watchdog reads is whatever `now` the claim was given.
  */
 @QuarkusTest
-@QuarkusTestResource(ValkeyQueueIT.ValkeyResource::class)
-@QuarkusTestResource(ValkeyQueueIT.PostgresResource::class)
+@QuarkusTestResource(ValkeyQueueIT.ValkeyResource::class, restrictToAnnotatedClass = true)
+@QuarkusTestResource(ValkeyQueueIT.PostgresResource::class, restrictToAnnotatedClass = true)
 class StaleMatchWatchdogIT {
 
     @Inject lateinit var watchdog: StaleMatchWatchdog

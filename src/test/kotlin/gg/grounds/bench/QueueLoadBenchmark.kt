@@ -466,6 +466,9 @@ class QueueLoadBenchmark {
             private var proxy: Proxy? = null
 
             fun setRoundTripMillis(rtt: Int) = applyLatency(proxy, rtt)
+
+            fun describeToxics(): String =
+                proxy?.toxics()?.all?.joinToString { "${it.name}=${it.toxicity}" } ?: "NO PROXY"
         }
     }
 
