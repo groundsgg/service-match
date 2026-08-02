@@ -108,6 +108,12 @@ tasks.register<Test>("benchmark") {
     testClassesDirs = sourceSets["test"].output.classesDirs
     classpath = sourceSets["test"].runtimeClasspath
     systemProperty("api.version", System.getenv("DOCKER_API_VERSION") ?: "1.44")
+    // Forwarded so a run can answer "does the connection pool cap this?"
+    // without editing anything: `./gradlew benchmark -PredisPool=64`.
+    (findProperty("redisPool") as String?)?.let {
+        systemProperty("quarkus.redis.max-pool-size", it)
+    }
+    (findProperty("ccu") as String?)?.let { systemProperty("bench.ccu", it) }
     useJUnitPlatform { includeTags("benchmark") }
     testLogging { showStandardStreams = true }
     outputs.upToDateWhen { false }

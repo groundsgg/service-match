@@ -422,7 +422,73 @@ class QueueLoadBenchmark {
         }
     }
 
-    private companion object {
+    /**
+     * Postgres with the same proxy treatment as the queue.
+     *
+     * Forming a match writes the match record synchronously inside the tick, and in production that
+     * database is on core behind its own tunnel — a benchmark with a local Postgres understates
+     * what a match costs by about half.
+     */
+    class ProxiedPostgresResource : QuarkusTestResourceLifecycleManager {
+        private lateinit var network: Network
+        private lateinit var postgres: PostgreSQLContainer<*>
+        private lateinit var toxiproxy: ToxiproxyContainer
+
+        override fun start(): Map<String, String> {
+            network = Network.newNetwork()
+            postgres =
+                PostgreSQLContainer(DockerImageName.parse("postgres:17-alpine"))
+                    .withNetwork(network)
+                    .withNetworkAliases("postgres")
+            postgres.start()
+
+            toxiproxy = ToxiproxyContainer(TOXIPROXY_IMAGE).withNetwork(network)
+            toxiproxy.start()
+
+            val client = ToxiproxyClient(toxiproxy.host, toxiproxy.controlPort)
+            proxy = client.createProxy("postgres", "0.0.0.0:8666", "postgres:5432")
+
+            return mapOf(
+                "quarkus.datasource.jdbc.url" to
+                    "jdbc:postgresql://${toxiproxy.host}:${toxiproxy.getMappedPort(8666)}/${postgres.databaseName}",
+                "quarkus.datasource.username" to postgres.username,
+                "quarkus.datasource.password" to postgres.password,
+            )
+        }
+
+        override fun stop() {
+            if (this::toxiproxy.isInitialized) toxiproxy.stop()
+            if (this::postgres.isInitialized) postgres.stop()
+            if (this::network.isInitialized) network.close()
+        }
+
+        companion object {
+            private var proxy: Proxy? = null
+
+            fun setRoundTripMillis(rtt: Int) = applyLatency(proxy, rtt)
+        }
+    }
+
+    companion object {
+        private val TOXIPROXY_IMAGE = DockerImageName.parse("ghcr.io/shopify/toxiproxy:2.12.0")
+
+        private const val UPSTREAM = "rtt-up"
+        private const val DOWNSTREAM = "rtt-down"
+
+        /**
+         * Split evenly over both directions, because that is what a round trip is: a request that
+         * takes half and a reply that takes half. Toxiproxy applies a latency toxic per direction.
+         */
+        internal fun applyLatency(proxy: Proxy?, rtt: Int) {
+            val p = proxy ?: return
+            for (name in listOf(UPSTREAM, DOWNSTREAM)) {
+                runCatching { p.toxics().get(name).remove() }
+            }
+            if (rtt <= 0) return
+            p.toxics().latency(UPSTREAM, ToxicDirection.UPSTREAM, (rtt / 2).toLong())
+            p.toxics().latency(DOWNSTREAM, ToxicDirection.DOWNSTREAM, (rtt / 2).toLong())
+        }
+
         const val TTL = 3600L
 
         // Queue depths worth knowing: a quiet mode, a busy one, and the cap the
