@@ -38,6 +38,7 @@ constructor(
     @param:ConfigProperty(name = "grounds.match.rating.default-mu") private val defaultMu: Double,
     @param:ConfigProperty(name = "grounds.match.rating.default-sigma")
     private val defaultSigma: Double,
+    @param:ConfigProperty(name = "grounds.match.region") private val region: String,
 ) {
 
     fun enqueue(playerId: UUID, modeId: String): Ticket {
@@ -86,6 +87,11 @@ constructor(
                 sigma = rating.sigma,
                 enqueuedAt = Instant.now(),
                 provisional = provisional,
+                // The player reached this instance, so this instance's region is
+                // where they are. No request field for it, deliberately: a client
+                // that could name its own region could ask to be matched somewhere
+                // it is not, and the plugin already talks to its local service.
+                location = region,
             )
 
         if (!queue.enqueue(ticket, ticketTtl)) {

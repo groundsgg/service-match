@@ -25,6 +25,14 @@ data class Ticket(
      * any provisional ticket is therefore recorded unranked.
      */
     val provisional: Boolean = false,
+    /**
+     * The region the player is connected to.
+     *
+     * A QoS hint, never a queue dimension. The queue deliberately spans every region so two players
+     * in different ones can meet at all; this only says where each of them would prefer to play,
+     * and the matcher weighs them against each other when it picks the host region.
+     */
+    val location: String = "",
     val state: TicketState = TicketState.QUEUED,
     val matchId: String? = null,
     val assignment: ServerAssignment? = null,

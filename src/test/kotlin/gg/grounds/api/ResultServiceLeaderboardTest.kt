@@ -29,8 +29,8 @@ import org.mockito.kotlin.verifyNoInteractions
  * an already-committed result back into a failure.
  */
 @QuarkusTest
-@QuarkusTestResource(ValkeyQueueIT.PostgresResource::class)
-@QuarkusTestResource(ValkeyQueueIT.ValkeyResource::class)
+@QuarkusTestResource(ValkeyQueueIT.PostgresResource::class, restrictToAnnotatedClass = true)
+@QuarkusTestResource(ValkeyQueueIT.ValkeyResource::class, restrictToAnnotatedClass = true)
 class ResultServiceLeaderboardTest {
 
     @Inject lateinit var matches: MatchRecordRepository

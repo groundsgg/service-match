@@ -1,4 +1,4 @@
--- claim(matchId, modeId, nowMs, ttl, teamSize, ticketId...) -> 1 | 0
+-- claim(matchId, modeId, nowMs, ttl, teamSize, target, ticketId...) -> 1 | 0
 --
 -- Commits a proposed match. This is the ONLY place a ticket becomes MATCHED,
 -- and it is the reason the matchmaker needs no leader election: Valkey runs
@@ -11,7 +11,8 @@
 -- KEYS[1] = mm:q:{mode}:rating
 -- KEYS[2] = mm:q:{mode}:wait
 -- KEYS[3] = mm:match:{matchId}
--- KEYS[4] = mm:alloc                  the allocation stream
+-- KEYS[4] = mm:alloc                  allocation stream PREFIX; the entry goes
+--                                     to mm:alloc:{target}, one stream per region
 -- KEYS[5] = mm:matches:live           claimed but not yet handed to a server
 --
 -- ARGV[1] = matchId
@@ -19,7 +20,9 @@
 -- ARGV[3] = nowMs
 -- ARGV[4] = ttlSeconds (match hash)
 -- ARGV[5] = teamSize   (teams are the ticket list chunked by this)
--- ARGV[6..] = ticketIds, in team order
+-- ARGV[6] = target region: where this match will be hosted, chosen by the
+--           matcher from the tickets' locations
+-- ARGV[7..] = ticketIds, in team order
 
 local ratingZ  = KEYS[1]
 local waitZ    = KEYS[2]
@@ -32,9 +35,10 @@ local modeId   = ARGV[2]
 local nowMs    = ARGV[3]
 local ttl      = tonumber(ARGV[4])
 local teamSize = tonumber(ARGV[5])
+local target   = ARGV[6]
 
 local ticketIds = {}
-for i = 6, #ARGV do
+for i = 7, #ARGV do
   ticketIds[#ticketIds + 1] = ARGV[i]
 end
 
@@ -86,6 +90,11 @@ redis.call('HSET', matchKey,
   'teams',    teamsEncoded,
   'state',    'FORMED',
   'attempts', '0',
+  -- Immutable from here. Every retry, adopt-by-label GET, POST and reaper for
+  -- this matchId uses it; re-deciding later would let a retry allocate in a
+  -- second region while the first one's server is already up. A different
+  -- region is only reachable through fail_requeue and a NEW matchId.
+  'target',   target,
   'createdAt', nowMs)
 redis.call('EXPIRE', matchKey, ttl)
 
@@ -94,7 +103,13 @@ redis.call('EXPIRE', matchKey, ttl)
 -- call, a crash in between would leave a match that nothing ever allocates.
 -- Recovery is then not a special case — it is the consumer group replaying
 -- what was never acknowledged.
-redis.call('XADD', allocS, '*', 'matchId', matchId, 'modeId', modeId)
+-- One stream per region, and that is what keeps this tractable: the allocator
+-- in the target region is the only one that ever sees this entry, so it
+-- allocates in its own cluster. Matching spans regions; allocating never has
+-- to. A single shared stream would mean whichever matcher won the claim tries
+-- to allocate, which is not necessarily where the players should play.
+redis.call('XADD', allocS .. ':' .. target, '*',
+  'matchId', matchId, 'modeId', modeId)
 
 -- The watchdog's worklist: matches that exist but no server has yet. Removed on
 -- assign (the server owns it from then on) and on fail_requeue. Without this a

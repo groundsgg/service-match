@@ -13,11 +13,17 @@ import org.jboss.logging.Logger
 /**
  * Turns formed matches into running servers.
  *
- * It consumes the `mm:alloc` stream, which the claim script wrote *in the same atomic step that
- * created the match*. That is what makes recovery ordinary rather than special: a crash between
- * claim and allocation leaves an entry that was delivered but never acknowledged, and the consumer
- * group hands it to whoever asks next. Restart, takeover after a dead replica, and the happy path
- * are all the same code — there is no boot-time reconciler.
+ * It consumes `mm:alloc:{own region}` — one stream per region, not one shared one. The queue itself
+ * spans regions so players in different ones can meet, but a match is always allocated by the
+ * region that will host it: only that cluster's Agones can hand out a server there. The claim
+ * script picks the stream from the host region it stamped on the match, so this worker never sees a
+ * match it could not allocate.
+ *
+ * The entry was written *in the same atomic step that created the match*. That is what makes
+ * recovery ordinary rather than special: a crash between claim and allocation leaves an entry that
+ * was delivered but never acknowledged, and the consumer group hands it to whoever asks next.
+ * Restart, takeover after a dead replica, and the happy path are all the same code — there is no
+ * boot-time reconciler.
  *
  * XAUTOCLAIM is what makes that continuous. Pending entries idle for longer than the claim timeout
  * get picked up by another consumer, so a replica that dies mid-allocation does not strand its
@@ -37,13 +43,17 @@ constructor(
     @param:ConfigProperty(name = "grounds.match.alloc.max-attempts") private val maxAttempts: Int,
     @param:ConfigProperty(name = "grounds.match.alloc.idle-reclaim-ms")
     private val idleReclaimMs: Long,
+    @param:ConfigProperty(name = "grounds.match.region") private val region: String,
 ) {
     private val consumerName: String = "allocator-${java.util.UUID.randomUUID()}"
 
+    /** This region's allocation stream. Nothing here ever touches another region's. */
+    private val stream: String = ValkeyQueue.allocStream(region)
+
     fun ensureGroup() {
         try {
-            redis.execute("XGROUP", "CREATE", ValkeyQueue.ALLOC_STREAM, GROUP, "0", "MKSTREAM")
-            log.info("Created consumer group $GROUP on ${ValkeyQueue.ALLOC_STREAM}")
+            redis.execute("XGROUP", "CREATE", stream, GROUP, "0", "MKSTREAM")
+            log.info("Created consumer group $GROUP on $stream")
         } catch (e: Exception) {
             // BUSYGROUP: someone else got there first. That is the normal case
             // on every replica but the first.
@@ -74,7 +84,7 @@ constructor(
         val reply =
             redis.execute(
                 "XAUTOCLAIM",
-                ValkeyQueue.ALLOC_STREAM,
+                stream,
                 GROUP,
                 consumerName,
                 idleReclaimMs.toString(),
@@ -99,7 +109,7 @@ constructor(
                 "COUNT",
                 BATCH.toString(),
                 "STREAMS",
-                ValkeyQueue.ALLOC_STREAM,
+                stream,
                 ">",
             ) ?: return
 
@@ -109,7 +119,7 @@ constructor(
         // pump: the allocator never drained a new entry in its life, it only ever
         // picked matches up later via XAUTOCLAIM's idle-reclaim path. That is why
         // allocation looked merely *slow* rather than broken.
-        val entries = reply.get(ValkeyQueue.ALLOC_STREAM) ?: return
+        val entries = reply.get(stream) ?: return
         for (i in 0 until entries.size()) {
             handleEntry(entries[i])
         }
@@ -236,7 +246,7 @@ constructor(
     }
 
     private fun ack(entryId: String) {
-        redis.execute("XACK", ValkeyQueue.ALLOC_STREAM, GROUP, entryId)
+        redis.execute("XACK", stream, GROUP, entryId)
     }
 
     /**

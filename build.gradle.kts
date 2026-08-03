@@ -78,6 +78,10 @@ dependencies {
     testImplementation("org.mockito.kotlin:mockito-kotlin:6.2.2")
     testImplementation("org.testcontainers:postgresql:1.21.5")
     testImplementation("org.testcontainers:junit-jupiter:1.21.5")
+    // Puts a controllable delay in front of Valkey. The queue is behind a
+    // Cloudflare Tunnel now, and a benchmark that cannot model that hop would
+    // measure the one thing that is no longer true.
+    testImplementation("org.testcontainers:toxiproxy:1.21.5")
 }
 
 sourceSets { main { java { srcDirs("build/classes/java/quarkus-generated-sources/grpc") } } }
@@ -89,6 +93,34 @@ tasks.test {
     // from this system property. Inherit the caller's value where one is set,
     // so CI can override.
     systemProperty("api.version", System.getenv("DOCKER_API_VERSION") ?: "1.44")
+
+    // Benchmarks are measurements, not assertions: they take minutes and their
+    // numbers depend on the machine. Run them with `./gradlew benchmark`.
+    useJUnitPlatform { excludeTags("benchmark") }
+}
+
+// Numbers for the queue under load, including a modelled tunnel hop. Prints a
+// table; fails only if the queue stops being correct under contention.
+tasks.register<Test>("benchmark") {
+    group = "verification"
+    description =
+        "Measures queue throughput and tick latency, locally and behind a modelled tunnel."
+    testClassesDirs = sourceSets["test"].output.classesDirs
+    classpath = sourceSets["test"].runtimeClasspath
+    systemProperty("api.version", System.getenv("DOCKER_API_VERSION") ?: "1.44")
+    // Forwarded so a run can answer "does the connection pool cap this?"
+    // without editing anything: `./gradlew benchmark -PredisPool=64`.
+    (findProperty("redisPool") as String?)?.let {
+        systemProperty("quarkus.redis.max-pool-size", it)
+    }
+    (findProperty("ccu") as String?)?.let { systemProperty("bench.ccu", it) }
+    (findProperty("snapshotLimit") as String?)?.let {
+        systemProperty("grounds.match.snapshot-limit", it)
+    }
+    (findProperty("replicas") as String?)?.let { systemProperty("bench.replicas", it) }
+    useJUnitPlatform { includeTags("benchmark") }
+    testLogging { showStandardStreams = true }
+    outputs.upToDateWhen { false }
 }
 
 tasks

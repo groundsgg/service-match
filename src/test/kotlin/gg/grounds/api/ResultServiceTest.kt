@@ -23,8 +23,8 @@ import org.junit.jupiter.api.Test
  * player who was not in the match. Both would let a gamemode move ratings at will.
  */
 @QuarkusTest
-@QuarkusTestResource(ValkeyQueueIT.PostgresResource::class)
-@QuarkusTestResource(ValkeyQueueIT.ValkeyResource::class)
+@QuarkusTestResource(ValkeyQueueIT.PostgresResource::class, restrictToAnnotatedClass = true)
+@QuarkusTestResource(ValkeyQueueIT.ValkeyResource::class, restrictToAnnotatedClass = true)
 class ResultServiceTest {
 
     @Inject lateinit var results: ResultService

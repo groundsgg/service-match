@@ -23,8 +23,8 @@ import org.mockito.kotlin.whenever
  * registry must reload from Valkey before it is trusted with anything.
  */
 @QuarkusTest
-@QuarkusTestResource(ValkeyQueueIT.ValkeyResource::class)
-@QuarkusTestResource(ValkeyQueueIT.PostgresResource::class)
+@QuarkusTestResource(ValkeyQueueIT.ValkeyResource::class, restrictToAnnotatedClass = true)
+@QuarkusTestResource(ValkeyQueueIT.PostgresResource::class, restrictToAnnotatedClass = true)
 class ModeRegistryTest {
 
     @Inject lateinit var queue: ValkeyQueue
