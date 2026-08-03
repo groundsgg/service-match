@@ -114,6 +114,10 @@ tasks.register<Test>("benchmark") {
         systemProperty("quarkus.redis.max-pool-size", it)
     }
     (findProperty("ccu") as String?)?.let { systemProperty("bench.ccu", it) }
+    (findProperty("snapshotLimit") as String?)?.let {
+        systemProperty("grounds.match.snapshot-limit", it)
+    }
+    (findProperty("replicas") as String?)?.let { systemProperty("bench.replicas", it) }
     useJUnitPlatform { includeTags("benchmark") }
     testLogging { showStandardStreams = true }
     outputs.upToDateWhen { false }

@@ -23,6 +23,18 @@ import org.junit.jupiter.api.TestInstance
 /**
  * Does the queue hold up at a given concurrent-player count, and what gives way first?
  *
+ * **The capacity model this produced**, validated against every row below:
+ * ```
+ * matches/s = modes × (snapshotLimit ÷ playersPerMatch) ÷ tickSeconds
+ * players   = matches/s × playersPerMatch × (matchSeconds + waitSeconds)
+ * ```
+ *
+ * Note what is absent: the number of matcher replicas, and the network. Every replica reads the
+ * same longest-waiting tickets and proposes the same matches, so all but one lose the claim race —
+ * measured at 1, 4 and 8 replicas, which differ by less than the run-to-run noise. Replicas buy
+ * availability, not throughput. Sharding modes across them would buy throughput; nothing does
+ * today.
+ *
  * Arithmetic can answer part of this, and the arithmetic is not the interesting part. What it
  * misses: the tick walks every mode whether or not anyone is in it, forming a match costs a
  * **second** remote write to Postgres that also crosses a tunnel, and several matcher replicas
@@ -63,6 +75,8 @@ class SustainedLoadBenchmark {
     // set it: the value that matters is the one the client actually got, and
     // the two differ as soon as it is set in application.properties.
     @ConfigProperty(name = "quarkus.redis.max-pool-size") lateinit var redisPoolSize: String
+
+    @ConfigProperty(name = "grounds.match.snapshot-limit") lateinit var snapshotLimit: String
 
     @Test
     fun `sustained load at rising player counts`() {
@@ -220,7 +234,11 @@ class SustainedLoadBenchmark {
     private fun report(results: List<Result>) {
         println()
         println("Sustained load — ${MODES.size} modes, $MATCHER_REPLICAS matcher replicas,")
-        println("redis connection pool: $redisPoolSize")
+        println("redis connection pool: $redisPoolSize, snapshot limit: $snapshotLimit")
+        println(
+            "a tick can therefore form at most " +
+                "${snapshotLimit.toInt() / MODE.playersPerMatch} matches per mode"
+        )
         println(
             "${MODE.playersPerMatch} players per match, ${MATCH_SECONDS}s matches, " +
                 "${TUNNEL_RTT_MS}ms round trip to BOTH the queue and the database"
@@ -272,7 +290,7 @@ class SustainedLoadBenchmark {
         const val RUN_SECONDS = 30
 
         /** Two regions, two replicas each — what stage would run. */
-        const val MATCHER_REPLICAS = 4
+        val MATCHER_REPLICAS = System.getProperty("bench.replicas")?.toInt() ?: 4
 
         /** 4v4v4v4, the shape bedwars-squads actually has. */
         val MODE = ModeConfig(modeId = "bench", teamSize = 4, teamCount = 4)
