@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.0](https://github.com/groundsgg/service-match/compare/v0.8.0...v0.9.0) (2026-08-04)
+
+
+### Features
+
+* **allocator:** push matches over NATS instead of dialling the pod ([#36](https://github.com/groundsgg/service-match/issues/36)) ([4064868](https://github.com/groundsgg/service-match/commit/40648683c6e17346ed009d6b4f4dee21fa258d60))
+
 ## [0.8.0](https://github.com/groundsgg/service-match/compare/v0.7.0...v0.8.0) (2026-08-04)
 
 
