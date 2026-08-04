@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.0](https://github.com/groundsgg/service-match/compare/v0.7.0...v0.8.0) (2026-08-04)
+
+
+### Features
+
+* **api:** serve the matchmaker over REST, push matches over NATS ([#34](https://github.com/groundsgg/service-match/issues/34)) ([492676e](https://github.com/groundsgg/service-match/commit/492676eaa1aff0dc3353c3e3e8aa491dc9c744ed))
+
 ## [0.7.0](https://github.com/groundsgg/service-match/compare/v0.6.0...v0.7.0) (2026-08-04)
 
 
