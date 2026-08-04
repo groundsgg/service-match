@@ -1,6 +1,17 @@
+import org.gradle.api.tasks.Copy
+
 plugins {
     id("gg.grounds.root") version "0.1.1"
     id("io.quarkus") version "3.30.6"
+}
+
+tasks.register<Copy>("generateOpenApiSnapshot") {
+    group = "documentation"
+    description = "Generates the OpenAPI snapshot consumed by groundsgg/api-reference"
+    dependsOn(tasks.named("quarkusBuild"))
+    from(layout.buildDirectory.file("generated/openapi/openapi.json"))
+    into(layout.buildDirectory.dir("api-reference"))
+    rename { "openapi.json" }
 }
 
 repositories {
@@ -25,7 +36,19 @@ configurations.all { resolutionStrategy.cacheChangingModulesFor(0, "seconds") }
 dependencies {
     implementation(enforcedPlatform("io.quarkus.platform:quarkus-bom:3.30.8"))
     implementation("io.quarkus:quarkus-arc")
+    // The public API. gRPC is still here alongside it for one release: every
+    // caller (plugin-match, game-bedwars, duel) still dials the stubs, and a
+    // matchmaker that answered only HTTP would take all three down at once.
+    // `quarkus.grpc.server.use-separate-server=false` already puts both on 9000,
+    // so serving them together needs no chart, Service or scrape change.
     implementation("io.quarkus:quarkus-grpc")
+    implementation("io.quarkus:quarkus-rest")
+    implementation("io.quarkus:quarkus-rest-jackson")
+    implementation("io.quarkus:quarkus-smallrye-openapi")
+    // Kotlin data classes as request bodies: without this module Jackson cannot
+    // see constructor parameter names, so every field arrives null and a
+    // non-null Kotlin property fails at construction rather than at validation.
+    implementation("com.fasterxml.jackson.module:jackson-module-kotlin")
     implementation("io.quarkus:quarkus-jdbc-postgresql")
     implementation("io.quarkus:quarkus-flyway")
     implementation("io.quarkus:quarkus-kotlin")
@@ -42,9 +65,10 @@ dependencies {
     // no aggregation-layer hop. (That whole apparatus was only needed while the
     // matchmaker was central.)
     implementation("io.quarkus:quarkus-kubernetes-client")
-    // JWT validation for incoming gRPC calls. SDK attaches the
-    // projected ServiceAccount token (aud=grounds-services); the
-    // interceptor reads + verifies it against k8s JWKS.
+    // JWT validation for incoming calls. The caller attaches its projected
+    // ServiceAccount token (aud=grounds-services); WorkloadAuthenticator
+    // verifies it against the cluster's JWKS, for both the REST filter and the
+    // gRPC interceptor.
     implementation("com.nimbusds:nimbus-jose-jwt:9.41.1")
     // OpenTelemetry — server-side gRPC instrumentation + OTLP exporter
     // to Alloy. Auto-wired via @WithSpan on @Blocking methods and the
@@ -78,6 +102,7 @@ dependencies {
     testImplementation("org.mockito.kotlin:mockito-kotlin:6.2.2")
     testImplementation("org.testcontainers:postgresql:1.21.5")
     testImplementation("org.testcontainers:junit-jupiter:1.21.5")
+    testImplementation("io.rest-assured:rest-assured")
 }
 
 sourceSets { main { java { srcDirs("build/classes/java/quarkus-generated-sources/grpc") } } }
