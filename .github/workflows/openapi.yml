@@ -1,0 +1,72 @@
+name: Publish OpenAPI Snapshot
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+  packages: read
+
+jobs:
+  export-openapi:
+    if: >-
+      github.event_name == 'workflow_dispatch' || github.event.release.prerelease == false
+    runs-on: arc-dind
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event_name == 'release' && github.event.release.tag_name || github.ref }}
+
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "25"
+          cache: gradle
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      - name: Configure GitHub Packages credentials
+        run: |
+          mkdir -p ~/.gradle
+          {
+            echo "github.user=${{ github.actor }}"
+            echo "github.token=${{ secrets.GITHUB_TOKEN }}"
+          } > ~/.gradle/gradle.properties
+
+      - name: Generate and validate OpenAPI snapshot
+        run: ./gradlew spotlessCheck test generateOpenApiSnapshot
+
+      - name: Verify snapshot artifact
+        run: |
+          snapshot_files="$(find build/api-reference -maxdepth 1 -type f -printf '%f\n')"
+          if [[ "$snapshot_files" != "openapi.json" ]]; then
+            echo "OpenAPI snapshot artifact has unexpected contents" >&2
+            exit 1
+          fi
+
+      - name: Upload OpenAPI snapshot
+        uses: actions/upload-artifact@v7
+        with:
+          name: openapi-snapshot
+          path: build/api-reference/openapi.json
+          if-no-files-found: error
+          retention-days: 1
+
+  publish-openapi:
+    needs: export-openapi
+    uses: groundsgg/.github/.github/workflows/publish-openapi-snapshot.yml@main
+    with:
+      artifact_name: openapi-snapshot
+      service_id: service-match
+      service_title: Match API
+      service_slug: match
+      source_ref: ${{ github.event_name == 'release' && github.event.release.tag_name || github.ref_name }}
+      source_sha: ${{ github.sha }}
+    secrets:
+      app_private_key: ${{ secrets.OPENAPI_PUBLISHER_PRIVATE_KEY }}
