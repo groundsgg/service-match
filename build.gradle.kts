@@ -81,6 +81,14 @@ dependencies {
     // Alloy scrapes the endpoint and ships it to core's Mimir under the
     // region's tenant. Brings the JVM and system binders for free.
     implementation("io.quarkus:quarkus-micrometer-registry-prometheus")
+    // The match push to a game server. Request-reply, not an event: the reply is
+    // what decides whether the players are routed or requeued. Protobuf stays on
+    // the wire — dropping gRPC is not the same as dropping protobuf, and both
+    // sides already generate these messages from the same contract.
+    implementation("io.nats:jnats:2.26.0")
+    // Currently on the classpath via quarkus-grpc; named explicitly so that
+    // removing gRPC does not take the NATS payloads with it.
+    implementation("com.google.protobuf:protobuf-java")
     implementation("gg.grounds:library-grpc-contracts-match:main-SNAPSHOT")
     // service-leaderboard is the writer target for a rated result's post-match
     // conservative skill; service-match is the only caller, forge never wires
