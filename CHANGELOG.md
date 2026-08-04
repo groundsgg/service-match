@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.0](https://github.com/groundsgg/service-match/compare/v0.6.0...v0.7.0) (2026-08-04)
+
+
+### Features
+
+* **metrics:** expose the Agroal connection-pool gauges ([#32](https://github.com/groundsgg/service-match/issues/32)) ([3fe1fd7](https://github.com/groundsgg/service-match/commit/3fe1fd710bade938b1d478249bc1c18eb9dbfded))
+
 ## [0.6.0](https://github.com/groundsgg/service-match/compare/v0.5.0...v0.6.0) (2026-07-31)
 
 
