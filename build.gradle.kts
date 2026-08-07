@@ -2,7 +2,7 @@ import org.gradle.api.tasks.Copy
 
 plugins {
     id("gg.grounds.root") version "0.1.1"
-    id("io.quarkus") version "3.30.6"
+    id("io.quarkus") version "3.38.1"
 }
 
 tasks.register<Copy>("generateOpenApiSnapshot") {
