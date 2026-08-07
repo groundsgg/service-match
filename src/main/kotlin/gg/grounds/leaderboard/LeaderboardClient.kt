@@ -1,23 +1,16 @@
 package gg.grounds.leaderboard
 
-import gg.grounds.grpc.leaderboard.LeaderboardServiceGrpc
-import gg.grounds.grpc.leaderboard.SubmitMode
-import gg.grounds.grpc.leaderboard.SubmitScoreRequest
-import io.grpc.CallOptions
-import io.grpc.Channel
-import io.grpc.ClientCall
-import io.grpc.ClientInterceptor
-import io.grpc.ForwardingClientCall
-import io.grpc.ManagedChannel
-import io.grpc.ManagedChannelBuilder
-import io.grpc.Metadata
-import io.grpc.MethodDescriptor
+import com.fasterxml.jackson.databind.ObjectMapper
 import jakarta.annotation.PreDestroy
 import jakarta.enterprise.context.ApplicationScoped
 import jakarta.inject.Inject
+import java.net.URI
+import java.net.http.HttpClient
+import java.net.http.HttpRequest
+import java.net.http.HttpResponse
 import java.nio.file.Files
 import java.nio.file.Path
-import java.util.concurrent.TimeUnit
+import java.time.Duration
 import org.eclipse.microprofile.config.inject.ConfigProperty
 import org.jboss.logging.Logger
 
@@ -46,13 +39,14 @@ constructor(
     private val deadlineMs: Long,
 ) {
 
-    // Plaintext, same as MatchHostClient: this is a pod-to-pod call inside the
-    // project's own vCluster, which is the tenancy boundary. There is no
-    // untrusted network between us and service-leaderboard.
-    private val channel: ManagedChannel =
-        ManagedChannelBuilder.forTarget(target).usePlaintext().intercept(TokenInterceptor()).build()
+    // LEADERBOARD_SERVICE_URL arrives as a bare host:port (the chart injects it
+    // with no scheme) — java.net.http throws parsing that directly, so default
+    // to http. Plaintext is fine: this is a pod-to-pod call inside the project's
+    // own vCluster, which is the tenancy boundary.
+    private val baseUri: URI = URI.create(if (target.contains("://")) target else "http://$target")
 
-    private val stub = LeaderboardServiceGrpc.newBlockingStub(channel)
+    private val http: HttpClient = HttpClient.newHttpClient()
+    private val json = ObjectMapper()
 
     /**
      * Submit one player's post-match score. `idempotencyKey` is the caller's job to make stable
@@ -64,17 +58,31 @@ constructor(
      */
     fun submitScore(boardId: String, playerId: String, score: Long, idempotencyKey: String) {
         try {
-            stub
-                .withDeadlineAfter(deadlineMs, TimeUnit.MILLISECONDS)
-                .submitScore(
-                    SubmitScoreRequest.newBuilder()
-                        .setBoardId(boardId)
-                        .setPlayerId(playerId)
-                        .setScore(score)
-                        .setMode(SubmitMode.SUBMIT_MODE_REPLACE)
-                        .setIdempotencyKey(idempotencyKey)
-                        .build()
+            val body =
+                json.writeValueAsString(
+                    mapOf(
+                        "playerId" to playerId,
+                        "score" to score,
+                        "mode" to "REPLACE",
+                        "idempotencyKey" to idempotencyKey,
+                    )
                 )
+
+            val request =
+                HttpRequest.newBuilder(baseUri.resolve("/v1/leaderboards/$boardId/scores"))
+                    .timeout(Duration.ofMillis(deadlineMs))
+                    .header("Content-Type", "application/json")
+                    .apply { token()?.let { header("Authorization", "Bearer $it") } }
+                    .POST(HttpRequest.BodyPublishers.ofString(body))
+                    .build()
+
+            val response = http.send(request, HttpResponse.BodyHandlers.ofString())
+            if (response.statusCode() != 200) {
+                log.error(
+                    "Leaderboard submit rejected, result stands regardless " +
+                        "(board=$boardId, player=$playerId, status=${response.statusCode()})"
+                )
+            }
         } catch (e: Exception) {
             log.error(
                 "Leaderboard submit failed, result stands regardless " +
@@ -86,40 +94,16 @@ constructor(
 
     @PreDestroy
     fun close() {
-        channel.shutdownNow()
+        http.close()
     }
 
-    companion object {
-        private val log: Logger = Logger.getLogger(LeaderboardClient::class.java)
-    }
-}
-
-/**
- * Attaches the pod's projected ServiceAccount JWT (aud=grounds-services) as `authorization: Bearer
- * <token>` on every call. Re-read from disk on every single call, never cached: it is a projected
- * volume the kubelet rotates, and a token cached once at startup would expire under this
- * long-running process while leaderboard writes quietly started failing auth hours later. A missing
- * file (local dev, or a service-leaderboard with auth disabled) just means the call goes out
- * unauthenticated rather than crashing.
- *
- * Mirrors `MatchServiceClient.TokenInterceptor` in plugin-match — same convention, same env var.
- */
-internal class TokenInterceptor : ClientInterceptor {
-    override fun <ReqT : Any, RespT : Any> interceptCall(
-        method: MethodDescriptor<ReqT, RespT>,
-        callOptions: CallOptions,
-        next: Channel,
-    ): ClientCall<ReqT, RespT> {
-        val call = next.newCall(method, callOptions)
-        return object : ForwardingClientCall.SimpleForwardingClientCall<ReqT, RespT>(call) {
-            override fun start(responseListener: Listener<RespT>, headers: Metadata) {
-                readToken()?.let { headers.put(AUTHORIZATION, "Bearer $it") }
-                super.start(responseListener, headers)
-            }
-        }
-    }
-
-    private fun readToken(): String? {
+    /**
+     * Read fresh on every call rather than cached: it is a projected volume the kubelet rotates,
+     * and a token read once at startup would expire under this long-running process while
+     * leaderboard writes quietly started failing auth hours later. A missing file (local dev, or a
+     * service-leaderboard with auth disabled) just means the call goes out unauthenticated.
+     */
+    private fun token(): String? {
         val path = Path.of(System.getenv("GROUNDS_TOKEN_FILE") ?: DEFAULT_TOKEN_PATH)
         return try {
             if (Files.exists(path)) Files.readString(path).trim().ifEmpty { null } else null
@@ -130,7 +114,6 @@ internal class TokenInterceptor : ClientInterceptor {
 
     companion object {
         private const val DEFAULT_TOKEN_PATH = "/var/run/secrets/grounds/token"
-        private val AUTHORIZATION: Metadata.Key<String> =
-            Metadata.Key.of("authorization", Metadata.ASCII_STRING_MARSHALLER)
+        private val log: Logger = Logger.getLogger(LeaderboardClient::class.java)
     }
 }
