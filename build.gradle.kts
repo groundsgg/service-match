@@ -36,11 +36,10 @@ configurations.all { resolutionStrategy.cacheChangingModulesFor(0, "seconds") }
 dependencies {
     implementation(enforcedPlatform("io.quarkus.platform:quarkus-bom:3.30.8"))
     implementation("io.quarkus:quarkus-arc")
-    // The public API. gRPC is still here alongside it for one release: every
-    // caller (plugin-match, game-bedwars, duel) still dials the stubs, and a
-    // matchmaker that answered only HTTP would take all three down at once.
-    // `quarkus.grpc.server.use-separate-server=false` already puts both on 9000,
-    // so serving them together needs no chart, Service or scrape change.
+    // No gRPC is served or dialled by this service any more, but the extension
+    // still owns the protoc codegen that `quarkus.generate-code.grpc.scan-for-proto`
+    // drives: the StartMatch messages pushed over NATS and the leaderboard stubs
+    // are both generated from it. It goes when the leaderboard client does.
     implementation("io.quarkus:quarkus-grpc")
     implementation("io.quarkus:quarkus-rest")
     implementation("io.quarkus:quarkus-rest-jackson")
