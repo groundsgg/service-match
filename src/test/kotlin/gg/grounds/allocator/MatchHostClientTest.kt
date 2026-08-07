@@ -20,11 +20,11 @@ import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
 
 /**
- * The match push over NATS, and the gRPC route it falls back to.
+ * The match push over NATS.
  *
- * The fallback is the point of most of these: a runtime that has not migrated has no responder on
- * the subject, and the difference between "nobody answered" and "the server said no" is the
- * difference between trying the other route and putting the players back on the queue.
+ * Most of these are about the one distinction that matters: "the server said no", "nobody answered"
+ * and "the broker is gone" all end the same way — the players go back on the queue — but only an
+ * accepted reply may route them.
  */
 class MatchHostClientTest {
 
@@ -32,7 +32,7 @@ class MatchHostClientTest {
     private val connection: Connection = mock()
 
     @Test
-    fun `a server that accepts over NATS is never dialled over gRPC`() {
+    fun `a server that accepts takes the match`() {
         givenConnected()
         whenever(connection.request(any<String>(), any<ByteArray>(), any<Duration>()))
             .thenReturn(reply(accepted = true))
@@ -61,9 +61,7 @@ class MatchHostClientTest {
     }
 
     @Test
-    fun `a refusal is final and is not retried down the other route`() {
-        // The server answered. It has room for nobody, and asking it again over
-        // gRPC would only get the same answer a second time.
+    fun `a refusal is final`() {
         givenConnected()
         whenever(connection.request(any<String>(), any<ByteArray>(), any<Duration>()))
             .thenReturn(reply(accepted = false, reason = "shutting down"))
@@ -72,33 +70,22 @@ class MatchHostClientTest {
     }
 
     @Test
-    fun `no responder falls back to gRPC`() {
-        // What an un-migrated runtime looks like: jnats answers null, immediately,
-        // because the server replies 503 rather than letting the deadline run out.
+    fun `no responder means no match`() {
+        // jnats answers null for both a 503 no-responder and a deadline that ran
+        // out. Either way nobody took this match.
         givenConnected()
         whenever(connection.request(any<String>(), any<ByteArray>(), any<Duration>()))
             .thenReturn(null)
 
-        // Nothing is listening on the fallback either, so the answer is false —
-        // what matters is that it got that far rather than giving up at NATS.
         assertFalse(client().startMatch(SERVER, MATCH, MODE, TEAMS))
         verify(connection).request(any<String>(), any<ByteArray>(), any<Duration>())
     }
 
     @Test
-    fun `a broker that is down falls back to gRPC`() {
+    fun `a broker that is down means no match`() {
         whenever(connector.connection()).thenReturn(null)
 
         assertFalse(client().startMatch(SERVER, MATCH, MODE, TEAMS))
-    }
-
-    @Test
-    fun `with the fallback off, no responder means no match`() {
-        givenConnected()
-        whenever(connection.request(any<String>(), any<ByteArray>(), any<Duration>()))
-            .thenReturn(null)
-
-        assertFalse(client(grpcFallback = false).startMatch(SERVER, MATCH, MODE, TEAMS))
     }
 
     @Test
@@ -110,10 +97,9 @@ class MatchHostClientTest {
     }
 
     @Test
-    fun `a reply that is not a StartMatchReply is refused rather than retried`() {
-        // Something else is answering on this subject. Falling back would push the
-        // same match down a second route on the strength of a reply we could not
-        // read; the players get requeued instead.
+    fun `a reply that is not a StartMatchReply is refused`() {
+        // Something else is answering on this subject. A reply we cannot read is
+        // not an acceptance; the players get requeued.
         givenConnected()
         // A truncated varint: there is no field number to be read here, so this
         // cannot be mistaken for a valid message with unknown fields.
@@ -128,14 +114,8 @@ class MatchHostClientTest {
         whenever(connector.connection()).thenReturn(connection)
     }
 
-    private fun client(grpcFallback: Boolean = true) =
-        MatchHostClient(
-            nats = connector,
-            subjectPrefix = "match.host",
-            grpcPort = 1, // Nothing listens here; the fallback is meant to fail fast.
-            grpcFallback = grpcFallback,
-            deadlineMs = 200,
-        )
+    private fun client() =
+        MatchHostClient(nats = connector, subjectPrefix = "match.host", deadlineMs = 200)
 
     /**
      * A real [NatsMessage] rather than a mock: a mock built inside the `thenReturn(...)` of another

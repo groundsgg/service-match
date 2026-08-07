@@ -61,19 +61,18 @@ a tie. If that test ever goes red after a dependency bump, the library
 has drifted from the reference: pin the old version, do not re-baseline
 the numbers — that would silently move every player's rating.
 
-## Build status
+## Transports
 
-Phase 1 of the design. Live today:
+Callers reach the service over REST under `/v1/match`, documented by the
+OpenAPI snapshot published to
+[groundsgg/api-reference](https://github.com/groundsgg/api-reference) on
+release. The `MatchService` gRPC surface it grew up on is gone; so is the
+gRPC route for pushing a formed match at a game server, which now goes
+over NATS request-reply on `match.host.<gameServerName>.start` with a
+protobuf payload.
 
-- the `match` gRPC contract and the Quarkus scaffold
-- the Flyway schema (`player_rating`, `match_record`, `rating_update`)
-- `GetRating`, which answers with seeded defaults for an unrated player
-- the rating math, golden-vector-pinned
-
-The queue RPCs (`Enqueue`, `CancelTicket`, `GetTicket`, `GetQueueStats`,
-`UpsertQueue`) answer `UNIMPLEMENTED` until the Valkey spine lands in
-phase 2 — deliberately, rather than returning a plausible-looking empty
-queue a caller would read as "nobody is waiting".
+Protobuf therefore stays on the wire even though gRPC does not — the
+`match` contract still defines what a `StartMatch` looks like.
 
 ## Local dev
 
