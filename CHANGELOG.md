@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.0](https://github.com/groundsgg/service-match/compare/v1.0.0...v1.1.0) (2026-08-10)
+
+
+### Features
+
+* **match:** let a mode name the fleet that serves it ([#43](https://github.com/groundsgg/service-match/issues/43)) ([8a6b76f](https://github.com/groundsgg/service-match/commit/8a6b76f996496c4474f4d95b3600aebe8404bada))
+
 ## [1.0.0](https://github.com/groundsgg/service-match/compare/v0.9.0...v1.0.0) (2026-08-07)
 
 
