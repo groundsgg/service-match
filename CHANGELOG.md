@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.0.0](https://github.com/groundsgg/service-match/compare/v0.9.0...v1.0.0) (2026-08-07)
+
+
+### ⚠ BREAKING CHANGES
+
+* **api:** drop the MatchService gRPC server and the MatchHost fallback ([#38](https://github.com/groundsgg/service-match/issues/38))
+
+### Features
+
+* **api:** drop the MatchService gRPC server and the MatchHost fallback ([#38](https://github.com/groundsgg/service-match/issues/38)) ([5036f48](https://github.com/groundsgg/service-match/commit/5036f481efa1f608a05111099130495ab9f3e99e))
+* **leaderboard:** post rated results over HTTP instead of gRPC ([#40](https://github.com/groundsgg/service-match/issues/40)) ([34a1212](https://github.com/groundsgg/service-match/commit/34a121229b2fec4b12aca4daeee374ec38ed5ff6))
+
 ## [0.9.0](https://github.com/groundsgg/service-match/compare/v0.8.0...v0.9.0) (2026-08-04)
 
 
