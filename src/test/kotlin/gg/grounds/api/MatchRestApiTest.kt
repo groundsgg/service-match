@@ -295,6 +295,39 @@ class MatchRestApiTest {
     }
 
     @Test
+    fun `an upsert can point a mode at a fleet that is not named after it`() {
+        whenever(queue.upsertMode(any())).thenReturn(true)
+
+        given()
+            .contentType(ContentType.JSON)
+            .body("""{"teamSize":1,"teamCount":2,"ranked":true,"fleetName":"duel"}""")
+            .put("/v1/match/modes/duel_pot_ranked/queue")
+            .then()
+            .statusCode(200)
+
+        val captor = argumentCaptor<ModeConfig>()
+        verify(queue).upsertMode(captor.capture())
+        assert(captor.firstValue.fleet == "duel")
+    }
+
+    @Test
+    fun `an upsert without a fleet allocates from a fleet named after the mode`() {
+        whenever(queue.upsertMode(any())).thenReturn(true)
+
+        given()
+            .contentType(ContentType.JSON)
+            .body("""{"teamSize":1,"teamCount":2}""")
+            .put("/v1/match/modes/$MODE/queue")
+            .then()
+            .statusCode(200)
+
+        val captor = argumentCaptor<ModeConfig>()
+        verify(queue).upsertMode(captor.capture())
+        assert(captor.firstValue.fleetName == null)
+        assert(captor.firstValue.fleet == MODE)
+    }
+
+    @Test
     fun `a zero in the band means unset, exactly as it does on the wire`() {
         // A caller porting from gRPC sends the zeros proto3 gave it for free. If
         // those were taken literally the band would be nothing and no two

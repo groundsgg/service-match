@@ -145,6 +145,15 @@ data class UpsertQueueRequestBody(
     val ranked: Boolean = false,
     @get:Schema(description = "Banding parameters. Omit for the defaults.", nullable = true)
     val band: BandRequestBody? = null,
+    @get:Schema(
+        description =
+            "The Agones Fleet that serves this mode. Omit when the fleet is named after the " +
+                "mode, which is the usual case. Set it when one image serves several modes — a " +
+                "duel server builds a different arena per mode and runs all of them from one " +
+                "pool, and a fleet per mode would idle a set of servers for each.",
+        nullable = true,
+    )
+    val fleetName: String? = null,
 )
 
 @Schema(

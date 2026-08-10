@@ -225,6 +225,9 @@ class ValkeyQueue @Inject constructor(private val redis: RedisDataSource) {
                 band.stepSeconds,
                 band.mercySeconds,
                 band.mutualSeconds,
+                // Appended, never inserted: the fields are positional and rows
+                // written before this existed are still out there. See decodeMode.
+                config.fleetName.orEmpty(),
             )
             .joinToString("|")
     }
@@ -245,6 +248,10 @@ class ValkeyQueue @Inject constructor(private val redis: RedisDataSource) {
                     mercySeconds = f[7].toInt(),
                     mutualSeconds = f[8].toInt(),
                 ),
+            // Absent in rows written before modes could name a fleet, and blank
+            // for the modes that do not. Both mean "the fleet is named after the
+            // mode", which is what ModeConfig.fleet falls back to.
+            fleetName = f.getOrNull(9)?.takeIf { it.isNotBlank() },
         )
     }
 

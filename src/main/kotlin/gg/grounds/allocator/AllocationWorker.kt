@@ -171,7 +171,7 @@ constructor(
             return "gave_up"
         }
 
-        val fleet = fleetNameFor(mode.modeId)
+        val fleet = mode.fleet
         val server = agones.allocate(matchId, modeId, fleet, mode.playersPerMatch)
 
         if (server == null) {
@@ -238,12 +238,6 @@ constructor(
     private fun ack(entryId: String) {
         redis.execute("XACK", ValkeyQueue.ALLOC_STREAM, GROUP, entryId)
     }
-
-    /**
-     * v1: one fleet per mode, named after it. When forge starts pushing the `matchmaking:` block
-     * this comes from the mode config instead.
-     */
-    private fun fleetNameFor(modeId: String): String = modeId
 
     companion object {
         private val log: Logger = Logger.getLogger(AllocationWorker::class.java)

@@ -77,12 +77,13 @@ class ModeResource @Inject constructor(private val queue: QueueService) {
                 teamCount = teamCount,
                 ranked = request.ranked,
                 band = (request.band ?: BandRequestBody()).toDomain(),
+                fleetName = request.fleetName?.trim()?.takeIf { it.isNotEmpty() },
             )
 
         val created = queue.upsertMode(config)
         log.info(
             "Upserted mode (id=$id, ${config.teamCount}x${config.teamSize}, " +
-                "ranked=${config.ranked}, created=$created)"
+                "ranked=${config.ranked}, fleet=${config.fleet}, created=$created)"
         )
         return UpsertQueueResponse(created)
     }
