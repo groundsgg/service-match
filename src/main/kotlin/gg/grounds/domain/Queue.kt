@@ -53,10 +53,26 @@ data class ModeConfig(
     val teamCount: Int,
     val ranked: Boolean = false,
     val band: BandConfig = BandConfig(),
+    /**
+     * The Agones Fleet that serves this mode, when it is not the mode itself.
+     *
+     * Modes and fleets are not one-to-one. A gamemode image that decides its rules from the mode id
+     * it is handed — duel builds a different arena and hands out a different kit per mode — serves
+     * many modes from one pool of servers, and splitting that pool per mode would idle nine sets of
+     * servers running the same image.
+     *
+     * Null means the fleet is named after the mode, which stays true for a gamemode that really
+     * does have one fleet of its own.
+     */
+    val fleetName: String? = null,
 ) {
     /** Players needed to form a match. */
     val playersPerMatch: Int
         get() = teamSize * teamCount
+
+    /** The fleet to allocate from. */
+    val fleet: String
+        get() = fleetName?.takeIf { it.isNotBlank() } ?: modeId
 }
 
 /**

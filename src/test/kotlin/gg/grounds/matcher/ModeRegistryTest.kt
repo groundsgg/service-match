@@ -9,6 +9,7 @@ import io.quarkus.test.common.QuarkusTestResource
 import io.quarkus.test.junit.QuarkusTest
 import jakarta.inject.Inject
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Test
 import org.mockito.kotlin.mock
@@ -74,6 +75,35 @@ class ModeRegistryTest {
         fresh.loadPersisted(StartupEvent())
 
         assertEquals(setOf("duel", "bedwars", "ffa"), fresh.all().map { it.modeId }.toSet())
+    }
+
+    @Test
+    fun `a mode remembers the fleet it named`() {
+        val config = mode("duel_pot_ranked", teamSize = 1, teamCount = 2).copy(fleetName = "duel")
+        queue.saveMode(config)
+
+        val fresh = ModeRegistry(queue)
+        fresh.loadPersisted(StartupEvent())
+
+        val reloaded = fresh.find("duel_pot_ranked")
+        assertEquals("duel", reloaded?.fleetName)
+        assertEquals("duel", reloaded?.fleet)
+    }
+
+    /**
+     * The encoded form is positional, and rows written before modes could name a fleet are still in
+     * Valkey. Reading one back must not fail, and must mean what it always meant.
+     */
+    @Test
+    fun `a mode persisted without a fleet still allocates from its own name`() {
+        queue.saveMode(mode("bedwars", teamSize = 4, teamCount = 2))
+
+        val fresh = ModeRegistry(queue)
+        fresh.loadPersisted(StartupEvent())
+
+        val reloaded = fresh.find("bedwars")
+        assertNull(reloaded?.fleetName)
+        assertEquals("bedwars", reloaded?.fleet)
     }
 
     @Test
