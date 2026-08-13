@@ -14,7 +14,13 @@ jobs:
   export-openapi:
     if: >-
       github.event_name == 'workflow_dispatch' || github.event.release.prerelease == false
-    runs-on: arc-dind
+    # GitHub-hosted: ARC ran on the core cluster and has been decommissioned,
+    # so `arc-dind` never gets a runner — this workflow fires on a release and
+    # would simply never publish, with no failure to notice.
+    #
+    # dind was for the Gradle test task's containers; hosted runners ship a
+    # working Docker daemon, so that need is covered.
+    runs-on: ubuntu-24.04
     steps:
       - name: Check out source
         uses: actions/checkout@v7
