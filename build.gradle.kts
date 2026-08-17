@@ -34,7 +34,7 @@ repositories {
 configurations.all { resolutionStrategy.cacheChangingModulesFor(0, "seconds") }
 
 dependencies {
-    implementation(enforcedPlatform("io.quarkus.platform:quarkus-bom:3.30.8"))
+    implementation(enforcedPlatform("io.quarkus.platform:quarkus-bom:3.38.2"))
     implementation("io.quarkus:quarkus-arc")
     // No gRPC is served or dialled by this service any more, but the extension
     // still owns the protoc codegen that `quarkus.generate-code.grpc.scan-for-proto`
