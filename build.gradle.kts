@@ -84,7 +84,7 @@ dependencies {
     // what decides whether the players are routed or requeued. Protobuf stays on
     // the wire — dropping gRPC is not the same as dropping protobuf, and both
     // sides already generate these messages from the same contract.
-    implementation("io.nats:jnats:2.26.0")
+    implementation("io.nats:jnats:2.26.2")
     // Currently on the classpath via quarkus-grpc; named explicitly so that
     // removing gRPC does not take the NATS payloads with it.
     implementation("com.google.protobuf:protobuf-java")
