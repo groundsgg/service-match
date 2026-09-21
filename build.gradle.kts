@@ -68,7 +68,7 @@ dependencies {
     // ServiceAccount token (aud=grounds-services); WorkloadAuthenticator
     // verifies it against the cluster's JWKS, for both the REST filter and the
     // gRPC interceptor.
-    implementation("com.nimbusds:nimbus-jose-jwt:9.41.1")
+    implementation("com.nimbusds:nimbus-jose-jwt:10.10")
     // OpenTelemetry — server-side gRPC instrumentation + OTLP exporter
     // to Alloy. Auto-wired via @WithSpan on @Blocking methods and the
     // built-in gRPC server interceptor.
