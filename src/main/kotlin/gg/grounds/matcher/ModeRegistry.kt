@@ -28,7 +28,14 @@ class ModeRegistry @Inject constructor(private val persistence: ValkeyQueue) {
 
     fun upsert(config: ModeConfig): Boolean = modes.put(config.modeId, config) == null
 
-    fun find(modeId: String): ModeConfig? = modes[modeId]
+    /**
+     * Falls back to Valkey on a miss. With more than one replica, a registration reaches only the
+     * replica the Service routed it to; the others learn the mode here. Without this, every replica
+     * that missed it answered "unknown mode" to enqueues and dropped the matches its allocator
+     * picked up from the shared stream — the players were requeued, re-matched, and dropped again.
+     */
+    fun find(modeId: String): ModeConfig? =
+        modes[modeId] ?: persistence.loadMode(modeId)?.also { modes.putIfAbsent(modeId, it) }
 
     fun all(): Collection<ModeConfig> = modes.values
 
