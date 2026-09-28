@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.1](https://github.com/groundsgg/service-match/compare/v1.1.0...v1.1.1) (2026-09-28)
+
+
+### Bug Fixes
+
+* **matcher:** read an unknown mode through from valkey ([#65](https://github.com/groundsgg/service-match/issues/65)) ([557ea3d](https://github.com/groundsgg/service-match/commit/557ea3d532a536d6bcfa6f34ea29decad1951dd5))
+
 ## [1.1.0](https://github.com/groundsgg/service-match/compare/v1.0.0...v1.1.0) (2026-08-10)
 
 
