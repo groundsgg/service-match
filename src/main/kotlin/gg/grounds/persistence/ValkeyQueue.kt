@@ -213,6 +213,10 @@ class ValkeyQueue @Inject constructor(private val redis: RedisDataSource) {
     fun loadModes(): List<ModeConfig> =
         hashes.hgetall(MODES_KEY).map { (modeId, encoded) -> decodeMode(modeId, encoded) }
 
+    /** One persisted mode, or null — for a replica that missed the registration. */
+    fun loadMode(modeId: String): ModeConfig? =
+        hashes.hget(MODES_KEY, modeId)?.let { decodeMode(modeId, it) }
+
     private fun encodeMode(config: ModeConfig): String {
         val band = config.band
         return listOf(

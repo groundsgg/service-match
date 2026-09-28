@@ -106,6 +106,32 @@ class ModeRegistryTest {
         assertEquals("bedwars", reloaded?.fleet)
     }
 
+    /**
+     * Two replicas, one registration: the Service routes it to one of them, and the other only
+     * loaded Valkey at boot, before the mode existed. Live on stage that replica dropped every
+     * match its allocator picked up as "unknown mode".
+     */
+    @Test
+    fun `a replica that missed a registration finds the mode in valkey`() {
+        val bootedEarly = ModeRegistry(queue)
+        bootedEarly.loadPersisted(StartupEvent())
+
+        // Registered on the other replica, after this one booted.
+        val config = mode("duel-axe-ranked", teamSize = 1, teamCount = 2).copy(fleetName = "duel")
+        queue.saveMode(config)
+
+        assertEquals(config, bootedEarly.find("duel-axe-ranked"))
+        assertEquals(true, bootedEarly.all().any { it.modeId == "duel-axe-ranked" })
+    }
+
+    @Test
+    fun `an unknown mode is still unknown`() {
+        val fresh = ModeRegistry(queue)
+        fresh.loadPersisted(StartupEvent())
+
+        assertNull(fresh.find("no-such-mode"))
+    }
+
     @Test
     fun `the dev duel seed does not clobber a persisted duel mode`() {
         // A real "duel" pushed by forge, shaped nothing like the dev placeholder
