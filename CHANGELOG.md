@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.0](https://github.com/groundsgg/service-match/compare/v1.1.1...v1.2.0) (2026-10-11)
+
+
+### Features
+
+* **metrics:** record per-player queue wait time ([#67](https://github.com/groundsgg/service-match/issues/67)) ([a5819df](https://github.com/groundsgg/service-match/commit/a5819dfcc0f9a923636ac18bff805b8cf2f83533))
+
 ## [1.1.1](https://github.com/groundsgg/service-match/compare/v1.1.0...v1.1.1) (2026-09-28)
 
 
