@@ -10,6 +10,7 @@ import gg.grounds.persistence.ValkeyQueue
 import io.quarkus.scheduler.Scheduled
 import jakarta.enterprise.context.ApplicationScoped
 import jakarta.inject.Inject
+import java.time.Duration
 import java.time.Instant
 import org.eclipse.microprofile.config.inject.ConfigProperty
 import org.jboss.logging.Logger
@@ -83,6 +84,7 @@ constructor(
             if (won) {
                 committed++
                 metrics.matchFormed(mode.modeId, proposal.ticketIds.size)
+                recordWaits(proposal, mode, tickets, now)
                 recordDurably(proposal, mode, tickets)
                 log.info(
                     "Formed match (id=${proposal.matchId}, mode=${mode.modeId}, " +
@@ -140,6 +142,20 @@ constructor(
                 "Failed to record match durably; it will play but not rate (id=${proposal.matchId})",
                 e,
             )
+        }
+    }
+
+    /** One wait per matched player, measured to the claim — the moment their queue ended. */
+    private fun recordWaits(
+        proposal: gg.grounds.domain.MatchProposal,
+        mode: ModeConfig,
+        tickets: List<Ticket>,
+        now: Instant,
+    ) {
+        val byId = tickets.associateBy { it.id }
+        for (id in proposal.ticketIds) {
+            val enqueuedAt = byId[id]?.enqueuedAt ?: continue
+            metrics.queueWait(mode.modeId, Duration.between(enqueuedAt, now))
         }
     }
 

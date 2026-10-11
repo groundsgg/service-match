@@ -5,6 +5,7 @@ import io.micrometer.core.instrument.MeterRegistry
 import io.micrometer.core.instrument.Timer
 import jakarta.enterprise.context.ApplicationScoped
 import jakarta.inject.Inject
+import java.time.Duration
 import java.util.concurrent.ConcurrentHashMap
 
 /**
@@ -55,6 +56,16 @@ class MatchMetrics @Inject constructor(private val registry: MeterRegistry) {
     fun matchFormed(mode: String, players: Int) {
         registry.counter("match.formed", "mode", mode).increment()
         registry.counter("match.players.matched", "mode", mode).increment(players.toDouble())
+    }
+
+    /**
+     * How long one player waited, from enqueue to the claim that put them in a match. Recorded per
+     * player, not per match, so the average is what a player experiences. Cancelled and expired
+     * tickets never reach a claim and are not in here: this is "how long until you got a game", not
+     * "how long people put up with the queue".
+     */
+    fun queueWait(mode: String, waited: Duration) {
+        registry.timer("match.queue.wait", "mode", mode).record(waited)
     }
 
     /**
