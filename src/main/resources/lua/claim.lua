@@ -1,4 +1,4 @@
--- claim(matchId, modeId, nowMs, ttl, teamSize, ticketId...) -> 1 | 0
+-- claim(matchId, modeId, nowMs, ttl, teamSize, traceparent, ticketId...) -> 1 | 0
 --
 -- Commits a proposed match. This is the ONLY place a ticket becomes MATCHED,
 -- and it is the reason the matchmaker needs no leader election: Valkey runs
@@ -19,7 +19,8 @@
 -- ARGV[3] = nowMs
 -- ARGV[4] = ttlSeconds (match hash)
 -- ARGV[5] = teamSize   (teams are the ticket list chunked by this)
--- ARGV[6..] = ticketIds, in team order
+-- ARGV[6] = traceparent of the match trace, '' when tracing is off
+-- ARGV[7..] = ticketIds, in team order
 
 local ratingZ  = KEYS[1]
 local waitZ    = KEYS[2]
@@ -32,9 +33,10 @@ local modeId   = ARGV[2]
 local nowMs    = ARGV[3]
 local ttl      = tonumber(ARGV[4])
 local teamSize = tonumber(ARGV[5])
+local traceparent = ARGV[6]
 
 local ticketIds = {}
-for i = 6, #ARGV do
+for i = 7, #ARGV do
   ticketIds[#ticketIds + 1] = ARGV[i]
 end
 
@@ -60,8 +62,18 @@ for i = 1, #ticketIds do
 end
 
 -- Everything checks out. Commit.
+--
+-- Each player's enqueuedAt is copied onto the match as `playerId=millis,...`,
+-- the form the StartMatch push carries it in, so the allocation worker can
+-- time the match and hand the game server its queue times without reading a
+-- ticket back.
+local enqueued = {}
 for i = 1, #ticketIds do
   local id = ticketIds[i]
+  local t = redis.call('HMGET', 'mm:ticket:' .. id, 'playerId', 'enqueuedAt')
+  if t[1] and t[2] then
+    enqueued[#enqueued + 1] = t[1] .. '=' .. t[2]
+  end
   redis.call('ZREM', ratingZ, id)
   redis.call('ZREM', waitZ, id)
   redis.call('HSET', 'mm:ticket:' .. id, 'state', 'MATCHED', 'matchId', matchId)
@@ -86,7 +98,11 @@ redis.call('HSET', matchKey,
   'teams',    teamsEncoded,
   'state',    'FORMED',
   'attempts', '0',
-  'createdAt', nowMs)
+  'createdAt', nowMs,
+  'enqueuedAt', table.concat(enqueued, ','))
+if traceparent ~= '' then
+  redis.call('HSET', matchKey, 'traceparent', traceparent)
+end
 redis.call('EXPIRE', matchKey, ttl)
 
 -- The durable pending index exists from the instant the match does. This XADD

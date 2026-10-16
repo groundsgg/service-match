@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.DeserializationFeature
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue
 import gg.grounds.domain.BandConfig
+import gg.grounds.domain.MatchTimeline
 import gg.grounds.domain.ModeConfig
 import gg.grounds.domain.ModeLease
 import gg.grounds.domain.ModeMeta
@@ -97,6 +98,7 @@ class ValkeyQueue @Inject constructor(private val redis: RedisDataSource) {
         teamSize: Int,
         now: Instant,
         matchTtlSeconds: Long,
+        traceparent: String? = null,
     ): Boolean =
         eval(
             "claim",
@@ -115,6 +117,7 @@ class ValkeyQueue @Inject constructor(private val redis: RedisDataSource) {
                     add(now.toEpochMilli().toString())
                     add(matchTtlSeconds.toString())
                     add(teamSize.toString())
+                    add(traceparent.orEmpty())
                     addAll(ticketIds)
                 },
         ) == 1L
@@ -201,6 +204,25 @@ class ValkeyQueue @Inject constructor(private val redis: RedisDataSource) {
             .map { team ->
                 team.split(',').filter { it.isNotEmpty() }.mapNotNull { findTicket(it)?.playerId }
             }
+    }
+
+    /** What the claim stored about the match's timing and trace; see [MatchTimeline]. */
+    fun matchTimeline(matchId: String): MatchTimeline {
+        val h = hashes.hmget(matchKey(matchId), "createdAt", "enqueuedAt", "traceparent")
+        return MatchTimeline(
+            formedAt = h["createdAt"]?.toLongOrNull()?.let(Instant::ofEpochMilli),
+            enqueuedAt =
+                h["enqueuedAt"]
+                    .orEmpty()
+                    .split(',')
+                    .mapNotNull { pair ->
+                        val parts = pair.split('=', limit = 2)
+                        val millis = parts.getOrNull(1)?.toLongOrNull()
+                        if (millis == null) null else parts[0] to Instant.ofEpochMilli(millis)
+                    }
+                    .toMap(),
+            traceparent = h["traceparent"]?.takeIf { it.isNotEmpty() },
+        )
     }
 
     /** Tickets waiting in a mode, oldest first. The oldest is the matcher's anchor. */
