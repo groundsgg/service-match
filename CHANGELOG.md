@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.0](https://github.com/groundsgg/service-match/compare/v1.2.0...v1.3.0) (2026-10-16)
+
+
+### Features
+
+* **modes:** let a free-for-all start under-filled after a fill time ([#69](https://github.com/groundsgg/service-match/issues/69)) ([096b045](https://github.com/groundsgg/service-match/commit/096b0451eb372e8bada2e8ffc827ec1cca27e7a5))
+
 ## [1.2.0](https://github.com/groundsgg/service-match/compare/v1.1.1...v1.2.0) (2026-10-11)
 
 
