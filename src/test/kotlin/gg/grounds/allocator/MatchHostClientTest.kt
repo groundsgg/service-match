@@ -160,7 +160,7 @@ class MatchHostClientTest {
             .thenReturn(null)
 
         assertFalse(client().startMatch(SERVER, MATCH, MODE, TEAMS))
-        verify(connection).request(any<String>(), any<ByteArray>(), any<Duration>())
+        verify(connection).request(any<String>(), any<Headers>(), any<ByteArray>(), any<Duration>())
     }
 
     @Test
