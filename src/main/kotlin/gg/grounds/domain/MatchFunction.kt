@@ -69,9 +69,10 @@ class BandedMmrMatchFunction : MatchFunction {
     }
 
     /**
-     * An under-filled free-for-all from whoever is left, once the longest-waiting of them has waited
-     * [ModeConfig.fillSeconds] for a full one. Rating plays no part: a mode that would rather start
-     * short than wait has already said who it plays against matters less than playing at all.
+     * An under-filled free-for-all from whoever is left, once the longest-waiting of them has
+     * waited [ModeConfig.fillSeconds] for a full one. Rating plays no part: a mode that would
+     * rather start short than wait has already said who it plays against matters less than playing
+     * at all.
      */
     private fun partial(mode: ModeConfig, left: List<Ticket>, now: Instant): MatchProposal? {
         if (!mode.allowsPartial || left.size < mode.minPlayers) return null

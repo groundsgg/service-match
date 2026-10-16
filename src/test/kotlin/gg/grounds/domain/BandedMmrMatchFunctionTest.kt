@@ -185,8 +185,7 @@ class BandedMmrMatchFunctionTest {
     @Test
     fun `an under-filled match never takes more than a full one holds`() {
         // Twelve far apart so no full match bands together; the partial is capped at eight.
-        val tickets =
-            (1..12).map { ticket("t$it", it * 10.0, waitedSeconds = 30L - it) }
+        val tickets = (1..12).map { ticket("t$it", it * 10.0, waitedSeconds = 30L - it) }
         val proposals = fn.propose(ffa.copy(fillSeconds = 0), tickets, now)
         assertEquals(8, proposals.single().ticketIds.size)
         assertEquals("t1", proposals.single().ticketIds.first(), "the oldest goes first")
