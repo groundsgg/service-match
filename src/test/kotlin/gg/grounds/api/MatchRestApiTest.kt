@@ -1,10 +1,14 @@
 package gg.grounds.api
 
 import gg.grounds.domain.ModeConfig
+import gg.grounds.domain.ModeLease
+import gg.grounds.domain.ModeMeta
+import gg.grounds.domain.ModeSummary
 import gg.grounds.domain.Rating
 import gg.grounds.domain.RatingRepository
 import gg.grounds.domain.ResultOutcome
 import gg.grounds.domain.ServerAssignment
+import gg.grounds.domain.StatBoard
 import gg.grounds.domain.StoredRating
 import gg.grounds.domain.Ticket
 import gg.grounds.domain.TicketState
@@ -18,10 +22,14 @@ import java.time.Instant
 import java.util.UUID
 import org.hamcrest.CoreMatchers.equalTo
 import org.hamcrest.CoreMatchers.nullValue
+import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
 import org.mockito.kotlin.any
+import org.mockito.kotlin.anyOrNull
 import org.mockito.kotlin.argumentCaptor
 import org.mockito.kotlin.eq
+import org.mockito.kotlin.isNull
+import org.mockito.kotlin.never
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
 
@@ -275,7 +283,7 @@ class MatchRestApiTest {
 
     @Test
     fun `an upsert without a band uses the defaults`() {
-        whenever(queue.upsertMode(any())).thenReturn(true)
+        whenever(queue.upsertMode(any(), any(), anyOrNull())).thenReturn(true)
 
         given()
             .contentType(ContentType.JSON)
@@ -286,7 +294,7 @@ class MatchRestApiTest {
             .body("created", equalTo(true))
 
         val captor = argumentCaptor<ModeConfig>()
-        verify(queue).upsertMode(captor.capture())
+        verify(queue).upsertMode(captor.capture(), any(), anyOrNull())
         val config = captor.firstValue
         assert(config.modeId == MODE)
         assert(config.teamSize == 4 && config.teamCount == 2)
@@ -296,7 +304,7 @@ class MatchRestApiTest {
 
     @Test
     fun `an upsert can point a mode at a fleet that is not named after it`() {
-        whenever(queue.upsertMode(any())).thenReturn(true)
+        whenever(queue.upsertMode(any(), any(), anyOrNull())).thenReturn(true)
 
         given()
             .contentType(ContentType.JSON)
@@ -306,13 +314,13 @@ class MatchRestApiTest {
             .statusCode(200)
 
         val captor = argumentCaptor<ModeConfig>()
-        verify(queue).upsertMode(captor.capture())
+        verify(queue).upsertMode(captor.capture(), any(), anyOrNull())
         assert(captor.firstValue.fleet == "duel")
     }
 
     @Test
     fun `an upsert without a fleet allocates from a fleet named after the mode`() {
-        whenever(queue.upsertMode(any())).thenReturn(true)
+        whenever(queue.upsertMode(any(), any(), anyOrNull())).thenReturn(true)
 
         given()
             .contentType(ContentType.JSON)
@@ -322,7 +330,7 @@ class MatchRestApiTest {
             .statusCode(200)
 
         val captor = argumentCaptor<ModeConfig>()
-        verify(queue).upsertMode(captor.capture())
+        verify(queue).upsertMode(captor.capture(), any(), anyOrNull())
         assert(captor.firstValue.fleetName == null)
         assert(captor.firstValue.fleet == MODE)
     }
@@ -332,7 +340,7 @@ class MatchRestApiTest {
         // A caller porting from gRPC sends the zeros proto3 gave it for free. If
         // those were taken literally the band would be nothing and no two
         // players would ever match.
-        whenever(queue.upsertMode(any())).thenReturn(false)
+        whenever(queue.upsertMode(any(), any(), anyOrNull())).thenReturn(false)
 
         given()
             .contentType(ContentType.JSON)
@@ -346,13 +354,13 @@ class MatchRestApiTest {
             .body("created", equalTo(false))
 
         val captor = argumentCaptor<ModeConfig>()
-        verify(queue).upsertMode(captor.capture())
+        verify(queue).upsertMode(captor.capture(), any(), anyOrNull())
         assert(captor.firstValue.band == gg.grounds.domain.BandConfig())
     }
 
     @Test
     fun `a band that is set is carried through`() {
-        whenever(queue.upsertMode(any())).thenReturn(true)
+        whenever(queue.upsertMode(any(), any(), anyOrNull())).thenReturn(true)
 
         given()
             .contentType(ContentType.JSON)
@@ -362,7 +370,7 @@ class MatchRestApiTest {
             .statusCode(200)
 
         val captor = argumentCaptor<ModeConfig>()
-        verify(queue).upsertMode(captor.capture())
+        verify(queue).upsertMode(captor.capture(), any(), anyOrNull())
         val band = captor.firstValue.band
         assert(band.b0 == 5.5)
         assert(band.mercySeconds == 30)
@@ -383,7 +391,7 @@ class MatchRestApiTest {
 
     @Test
     fun `a free-for-all can start with fewer players`() {
-        whenever(queue.upsertMode(any())).thenReturn(true)
+        whenever(queue.upsertMode(any(), any(), anyOrNull())).thenReturn(true)
 
         given()
             .contentType(ContentType.JSON)
@@ -393,13 +401,13 @@ class MatchRestApiTest {
             .statusCode(200)
 
         val captor = argumentCaptor<ModeConfig>()
-        verify(queue).upsertMode(captor.capture())
+        verify(queue).upsertMode(captor.capture(), any(), anyOrNull())
         assert(captor.firstValue.minPlayers == 1 && captor.firstValue.fillSeconds == 20)
     }
 
     @Test
     fun `an upsert without a minimum always waits for a full match`() {
-        whenever(queue.upsertMode(any())).thenReturn(true)
+        whenever(queue.upsertMode(any(), any(), anyOrNull())).thenReturn(true)
 
         given()
             .contentType(ContentType.JSON)
@@ -409,7 +417,7 @@ class MatchRestApiTest {
             .statusCode(200)
 
         val captor = argumentCaptor<ModeConfig>()
-        verify(queue).upsertMode(captor.capture())
+        verify(queue).upsertMode(captor.capture(), any(), anyOrNull())
         assert(captor.firstValue.minPlayers == 4 && !captor.firstValue.allowsPartial)
     }
 
@@ -433,6 +441,193 @@ class MatchRestApiTest {
             .then()
             .statusCode(400)
             .body("code", equalTo("invalid_request"))
+    }
+
+    @Test
+    fun `an upsert with a lease carries the lease and the lobby metadata`() {
+        whenever(queue.upsertMode(any(), any(), anyOrNull())).thenReturn(true)
+
+        given()
+            .contentType(ContentType.JSON)
+            .body(
+                """{"teamSize":1,"teamCount":24,"minPlayers":1,"fillSeconds":30,""" +
+                    """"leaseId":"survivalgames-abc12","leaseSeconds":45,""" +
+                    """"displayName":"SurvivalGames","icon":"minecraft:iron_sword",""" +
+                    """"boards":[{"stat":"wins","displayName":"Wins"},{"stat":"kills"}],""" +
+                    """"rejoinEnabled":true}"""
+            )
+            .put("/v1/match/modes/survivalgames-solo/queue")
+            .then()
+            .statusCode(200)
+            .body("created", equalTo(true))
+
+        val meta = argumentCaptor<ModeMeta>()
+        val lease = argumentCaptor<ModeLease>()
+        verify(queue).upsertMode(any(), meta.capture(), lease.capture())
+        assertEquals(ModeLease("survivalgames-abc12", 45), lease.firstValue)
+        assertEquals(
+            ModeMeta(
+                displayName = "SurvivalGames",
+                icon = "minecraft:iron_sword",
+                // A board without a display name shows its stat.
+                boards = listOf(StatBoard("wins", "Wins"), StatBoard("kills", "kills")),
+                rejoinEnabled = true,
+            ),
+            meta.firstValue,
+        )
+    }
+
+    @Test
+    fun `an upsert without a lease id registers a permanent mode with default metadata`() {
+        // What every game sends today. It must keep working exactly as before.
+        whenever(queue.upsertMode(any(), any(), anyOrNull())).thenReturn(false)
+
+        given()
+            .contentType(ContentType.JSON)
+            .body("""{"teamSize":1,"teamCount":2,"ranked":true}""")
+            .put("/v1/match/modes/$MODE/queue")
+            .then()
+            .statusCode(200)
+            .body("created", equalTo(false))
+
+        val meta = argumentCaptor<ModeMeta>()
+        verify(queue).upsertMode(any(), meta.capture(), isNull())
+        assertEquals(ModeMeta(), meta.firstValue)
+    }
+
+    @Test
+    fun `a lease without a ttl lasts sixty seconds`() {
+        whenever(queue.upsertMode(any(), any(), anyOrNull())).thenReturn(true)
+
+        given()
+            .contentType(ContentType.JSON)
+            .body("""{"teamSize":1,"teamCount":2,"leaseId":"duel-xyz"}""")
+            .put("/v1/match/modes/$MODE/queue")
+            .then()
+            .statusCode(200)
+
+        val lease = argumentCaptor<ModeLease>()
+        verify(queue).upsertMode(any(), any(), lease.capture())
+        assertEquals(60, lease.firstValue.seconds)
+    }
+
+    @Test
+    fun `invalid lease and metadata fields are refused`() {
+        val invalid =
+            listOf(
+                """"leaseId":"duel-xyz","leaseSeconds":14""",
+                """"leaseId":"duel-xyz","leaseSeconds":601""",
+                """"leaseId":"   """",
+                """"displayName":"${"x".repeat(65)}"""",
+                """"boards":[{"stat":"Wins"}]""",
+                """"boards":[{"stat":"${"a".repeat(33)}"}]""",
+                """"boards":[{"displayName":"Wins"}]""",
+                """"boards":[{"stat":"wins","displayName":"${"x".repeat(65)}"}]""",
+                """"boards":[{"stat":"wins"},{"stat":"wins"}]""",
+            )
+        for (fields in invalid) {
+            given()
+                .contentType(ContentType.JSON)
+                .body("""{"teamSize":1,"teamCount":2,$fields}""")
+                .put("/v1/match/modes/$MODE/queue")
+                .then()
+                .statusCode(400)
+                .body("code", equalTo("invalid_request"))
+        }
+        verify(queue, never()).upsertMode(any(), any(), anyOrNull())
+    }
+
+    // -----------------------------------------------------------
+    // GET /v1/match/modes
+    // -----------------------------------------------------------
+
+    @Test
+    fun `the mode list carries metadata, shape and leases`() {
+        whenever(queue.listModes())
+            .thenReturn(
+                listOf(
+                    ModeSummary(
+                        config =
+                            ModeConfig(
+                                modeId = "survivalgames-solo",
+                                teamSize = 1,
+                                teamCount = 24,
+                                minPlayers = 1,
+                                leased = true,
+                            ),
+                        meta =
+                            ModeMeta(
+                                displayName = "SurvivalGames",
+                                icon = "minecraft:iron_sword",
+                                boards = listOf(StatBoard("wins", "Wins")),
+                            ),
+                        ticketsQueued = 3,
+                        leases = 2,
+                    ),
+                    ModeSummary(
+                        config = ModeConfig(modeId = "duel", teamSize = 1, teamCount = 2),
+                        meta = ModeMeta(rejoinEnabled = true),
+                        ticketsQueued = 0,
+                        leases = 0,
+                    ),
+                )
+            )
+
+        given()
+            .get("/v1/match/modes")
+            .then()
+            .statusCode(200)
+            .body("modes[0].modeId", equalTo("survivalgames-solo"))
+            .body("modes[0].displayName", equalTo("SurvivalGames"))
+            .body("modes[0].icon", equalTo("minecraft:iron_sword"))
+            .body("modes[0].teamSize", equalTo(1))
+            .body("modes[0].teamCount", equalTo(24))
+            .body("modes[0].playersPerMatch", equalTo(24))
+            .body("modes[0].minPlayers", equalTo(1))
+            .body("modes[0].ranked", equalTo(false))
+            .body("modes[0].rejoinEnabled", equalTo(false))
+            .body("modes[0].boards[0].stat", equalTo("wins"))
+            .body("modes[0].boards[0].displayName", equalTo("Wins"))
+            .body("modes[0].ticketsQueued", equalTo(3))
+            .body("modes[0].leases", equalTo(2))
+            .body("modes[0].permanent", equalTo(false))
+            // A mode that registered no display name shows its id.
+            .body("modes[1].displayName", equalTo("duel"))
+            .body("modes[1].icon", nullValue())
+            .body("modes[1].rejoinEnabled", equalTo(true))
+            .body("modes[1].leases", equalTo(0))
+            .body("modes[1].permanent", equalTo(true))
+    }
+
+    // -----------------------------------------------------------
+    // DELETE /v1/match/modes/{mode}[/leases/{lease}]
+    // -----------------------------------------------------------
+
+    @Test
+    fun `deleting a mode answers 204`() {
+        // Authentication is off under test, so there is no subject to refuse — the 403 is
+        // covered by AdminGuardTest.
+        whenever(queue.deleteMode(MODE)).thenReturn(true)
+
+        given().delete("/v1/match/modes/$MODE").then().statusCode(204)
+    }
+
+    @Test
+    fun `deleting an unknown mode is 404`() {
+        whenever(queue.deleteMode(MODE)).thenReturn(false)
+
+        given()
+            .delete("/v1/match/modes/$MODE")
+            .then()
+            .statusCode(404)
+            .body("code", equalTo("unknown_mode"))
+    }
+
+    @Test
+    fun `releasing a lease answers 204`() {
+        given().delete("/v1/match/modes/$MODE/leases/duel-xyz").then().statusCode(204)
+
+        verify(queue).releaseLease(MODE, "duel-xyz")
     }
 
     // -----------------------------------------------------------

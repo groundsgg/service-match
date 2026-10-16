@@ -45,13 +45,35 @@ constructor(
         concurrentExecution = Scheduled.ConcurrentExecution.SKIP,
     )
     fun tick() {
-        for (mode in modes.all()) {
+        val now = Instant.now()
+        try {
+            // Learn what other replicas registered and removed before deciding what to tick.
+            modes.resync()
+        } catch (e: Exception) {
+            log.error("Mode resync failed; ticking the modes known so far", e)
+        }
+        for (mode in modes.all().toList()) {
             try {
+                if (expired(mode, now)) continue
                 metrics.timeTick(mode.modeId) { tickMode(mode) }
             } catch (e: Exception) {
                 log.error("Queue tick failed (mode=${mode.modeId})", e)
             }
         }
+    }
+
+    /**
+     * Remove the mode if its last lease has run out. Every replica sweeps every mode on every tick;
+     * the script makes that safe, because the first to find the mode dead removes it and the rest
+     * then find nothing to do.
+     */
+    private fun expired(mode: ModeConfig, now: Instant): Boolean {
+        val cancelled = queue.expireMode(mode.modeId, now) ?: return false
+        modes.remove(mode.modeId)
+        log.info(
+            "Last lease expired, removed mode (id=${mode.modeId}, cancelled=$cancelled ticket(s))"
+        )
+        return true
     }
 
     /** Visible for testing — runs one pass over one mode. */

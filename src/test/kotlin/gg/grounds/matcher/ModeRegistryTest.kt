@@ -4,6 +4,7 @@ import gg.grounds.domain.BandConfig
 import gg.grounds.domain.ModeConfig
 import gg.grounds.persistence.ValkeyQueue
 import gg.grounds.persistence.ValkeyQueueIT
+import io.quarkus.redis.datasource.RedisDataSource
 import io.quarkus.runtime.StartupEvent
 import io.quarkus.test.common.QuarkusTestResource
 import io.quarkus.test.junit.QuarkusTest
@@ -11,6 +12,7 @@ import jakarta.inject.Inject
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertThrows
+import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.mockito.kotlin.mock
 import org.mockito.kotlin.whenever
@@ -29,6 +31,15 @@ import org.mockito.kotlin.whenever
 class ModeRegistryTest {
 
     @Inject lateinit var queue: ValkeyQueue
+
+    @Inject lateinit var redis: RedisDataSource
+
+    // The dev seed now writes "duel" to Valkey, so state must not leak between tests.
+    @BeforeEach
+    fun clean() {
+        redis.execute("FLUSHALL")
+        queue.loadScripts()
+    }
 
     private fun mode(
         modeId: String,
@@ -152,6 +163,18 @@ class ModeRegistryTest {
         fresh.loadPersisted(StartupEvent())
 
         assertEquals("duel", fresh.find("duel")?.modeId)
+    }
+
+    @Test
+    fun `the dev duel seed is persisted, so a resync keeps it`() {
+        val fresh = ModeRegistry(queue)
+        fresh.loadPersisted(StartupEvent())
+
+        // Each tick resyncs from Valkey; a seed held only in memory would vanish on the first.
+        fresh.resync()
+
+        assertEquals("duel", fresh.find("duel")?.modeId)
+        assertEquals("duel", queue.loadMode("duel")?.modeId)
     }
 
     @Test

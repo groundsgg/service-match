@@ -1,6 +1,7 @@
 package gg.grounds.api
 
 import gg.grounds.domain.BandConfig
+import gg.grounds.domain.ModeSummary
 import gg.grounds.domain.Rating
 import gg.grounds.domain.ResultOutcome
 import gg.grounds.domain.StoredRating
@@ -170,6 +171,45 @@ data class UpsertQueueRequestBody(
         nullable = true,
     )
     val fillSeconds: Int? = null,
+    @get:Schema(
+        description =
+            "Identity of the registering game server, its HOSTNAME. Present makes this " +
+                "registration a lease: the mode then exists only while at least one lease is " +
+                "unexpired. Omit for a permanent mode.",
+        nullable = true,
+    )
+    val leaseId: String? = null,
+    @get:Schema(
+        description = "Lease TTL in seconds, 15..600. Renewed by repeating the PUT. Default 60.",
+        nullable = true,
+    )
+    val leaseSeconds: Int? = null,
+    @get:Schema(
+        description = "Shown in the lobby. Max 64 characters. Omit to show the mode id.",
+        nullable = true,
+    )
+    val displayName: String? = null,
+    @get:Schema(
+        description = "Minecraft item key for the lobby, e.g. `minecraft:iron_sword`.",
+        nullable = true,
+    )
+    val icon: String? = null,
+    @get:Schema(
+        description =
+            "Stat boards the game writes as `<modeId>.<stat>`. The first is the default for " +
+                "/leaderboard.",
+        nullable = true,
+    )
+    val boards: List<BoardBody>? = null,
+    @get:Schema(description = "Whether a disconnected player may rejoin a running match.")
+    val rejoinEnabled: Boolean = false,
+)
+
+@Schema(description = "A stat board a mode writes.")
+data class BoardBody(
+    @get:Schema(description = "Matches [a-z0-9_-]{1,32}.", examples = ["wins"]) val stat: String?,
+    @get:Schema(description = "Max 64 characters. Omit to show the stat.", nullable = true)
+    val displayName: String? = null,
 )
 
 @Schema(
@@ -205,6 +245,53 @@ data class BandRequestBody(
 
 @Schema(description = "Whether the upsert created the mode or replaced an existing config.")
 data class UpsertQueueResponse(val created: Boolean)
+
+@Schema(description = "Every live mode: permanent, or leased with at least one live lease.")
+data class ModesResponse(
+    @get:Schema(description = "Sorted by modeId.") val modes: List<ModeResponse>
+)
+
+@Schema(description = "A live mode, as the lobby lists it.")
+data class ModeResponse(
+    val modeId: String,
+    @get:Schema(description = "The mode id when the mode registered none.") val displayName: String,
+    @get:Schema(nullable = true) val icon: String?,
+    val teamSize: Int,
+    val teamCount: Int,
+    val playersPerMatch: Int,
+    val minPlayers: Int,
+    val ranked: Boolean,
+    val rejoinEnabled: Boolean,
+    val boards: List<BoardResponse>,
+    val ticketsQueued: Int,
+    @get:Schema(description = "Unexpired leases. Zero for a permanent mode.") val leases: Int,
+    @get:Schema(description = "True for a mode never registered with a lease.")
+    val permanent: Boolean,
+) {
+    companion object {
+        fun from(summary: ModeSummary): ModeResponse {
+            val config = summary.config
+            val meta = summary.meta
+            return ModeResponse(
+                modeId = config.modeId,
+                displayName = meta.displayName ?: config.modeId,
+                icon = meta.icon,
+                teamSize = config.teamSize,
+                teamCount = config.teamCount,
+                playersPerMatch = config.playersPerMatch,
+                minPlayers = config.minPlayers,
+                ranked = config.ranked,
+                rejoinEnabled = meta.rejoinEnabled,
+                boards = meta.boards.map { BoardResponse(it.stat, it.displayName) },
+                ticketsQueued = summary.ticketsQueued.toInt(),
+                leases = summary.leases.toInt(),
+                permanent = !config.leased,
+            )
+        }
+    }
+}
+
+data class BoardResponse(val stat: String, val displayName: String)
 
 // ---------------------------------------------------------------
 // Results

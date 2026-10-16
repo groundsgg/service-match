@@ -1,6 +1,9 @@
 package gg.grounds.api
 
 import gg.grounds.domain.ModeConfig
+import gg.grounds.domain.ModeLease
+import gg.grounds.domain.ModeMeta
+import gg.grounds.domain.ModeSummary
 import gg.grounds.domain.Rating
 import gg.grounds.domain.RatingRepository
 import gg.grounds.domain.Ticket
@@ -110,11 +113,56 @@ constructor(
      * Write the mode config through to Valkey before it ever reaches the in-memory registry — so
      * that if the persist fails, the registry never advertises a mode a restart would lose.
      *
-     * @return true if this is a new mode, matching `ModeRegistry.upsert`'s existing contract.
+     * With a [lease], this is also the renewal: the game server repeats the same call.
+     *
+     * @return true if the mode did not exist in Valkey before.
      */
-    fun upsertMode(config: ModeConfig): Boolean {
-        queue.saveMode(config)
-        return modes.upsert(config)
+    fun upsertMode(config: ModeConfig, meta: ModeMeta, lease: ModeLease?): Boolean {
+        val created = queue.upsertMode(config, meta, lease, Instant.now())
+        // Valkey decided whether the mode is leased; the registry learns it on the next resync,
+        // and the flag only matters to the expiry sweep, which reads Valkey anyway.
+        modes.upsert(config)
+        return created
+    }
+
+    /** Release one lease. Removes the mode, cancelling its waiting tickets, if it was the last. */
+    fun releaseLease(modeId: String, leaseId: String) {
+        val cancelled = queue.releaseLease(modeId, leaseId, Instant.now()) ?: return
+        modes.remove(modeId)
+        log.info("Last lease released, removed mode (id=$modeId, cancelled=$cancelled ticket(s))")
+    }
+
+    /**
+     * Remove a mode outright, permanent or leased, cancelling its waiting tickets.
+     *
+     * @return false if there was no such mode.
+     */
+    fun deleteMode(modeId: String): Boolean {
+        val cancelled = queue.deleteMode(modeId, Instant.now()) ?: return false
+        modes.remove(modeId)
+        log.info("Deleted mode (id=$modeId, cancelled=$cancelled ticket(s))")
+        return true
+    }
+
+    /**
+     * Every live mode, read from Valkey rather than this replica's registry so that every replica
+     * answers the same. A leased mode whose leases have all expired but that no sweep has removed
+     * yet is already left out.
+     */
+    fun listModes(): List<ModeSummary> {
+        val now = Instant.now()
+        return queue
+            .loadModes()
+            .map { config ->
+                ModeSummary(
+                    config = config,
+                    meta = queue.loadMeta(config.modeId),
+                    ticketsQueued = queue.queueDepth(config.modeId),
+                    leases = queue.liveLeaseCount(config.modeId, now),
+                )
+            }
+            .filter { !it.config.leased || it.leases > 0 }
+            .sortedBy { it.config.modeId }
     }
 
     companion object {

@@ -149,8 +149,13 @@ constructor(
     private fun allocateOne(matchId: String, modeId: String, entryId: String): String {
         val mode = modes.find(modeId)
         if (mode == null) {
-            log.warn("Match references an unknown mode, dropping (match=$matchId, mode=$modeId)")
-            queue.failRequeue(matchId, modeId)
+            // The mode was removed after the match formed — its last server went away. Requeueing
+            // would strand the players in a queue nobody matches; cancel so they can queue again.
+            val cancelled = queue.failCancel(matchId)
+            log.warn(
+                "Match references an unknown mode, cancelled $cancelled ticket(s) " +
+                    "(match=$matchId, mode=$modeId)"
+            )
             ack(entryId)
             return "unknown_mode"
         }
