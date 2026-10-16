@@ -65,10 +65,24 @@ data class ModeConfig(
      * does have one fleet of its own.
      */
     val fleetName: String? = null,
+    /**
+     * The fewest players a match may start with, for a free-for-all that is still worth playing
+     * under-filled. Equal to [playersPerMatch] — always a full match — unless the mode lowers it.
+     */
+    val minPlayers: Int = teamSize * teamCount,
+    /**
+     * How long the longest-waiting ticket waits for a full match before an under-filled one of at
+     * least [minPlayers] forms. Ignored while [minPlayers] is [playersPerMatch].
+     */
+    val fillSeconds: Int = 0,
 ) {
-    /** Players needed to form a match. */
+    /** Players in a full match, and the most a match can hold. */
     val playersPerMatch: Int
         get() = teamSize * teamCount
+
+    /** Whether a match may form with fewer than [playersPerMatch] players. */
+    val allowsPartial: Boolean
+        get() = minPlayers < playersPerMatch
 
     /** The fleet to allocate from. */
     val fleet: String

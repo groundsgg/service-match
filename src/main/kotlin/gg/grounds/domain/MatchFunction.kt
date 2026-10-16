@@ -42,10 +42,8 @@ class BandedMmrMatchFunction : MatchFunction {
         now: Instant,
     ): List<MatchProposal> {
         val needed = mode.playersPerMatch
-        if (tickets.size < needed) return emptyList()
-
         val queued = tickets.filter { it.state == TicketState.QUEUED }
-        if (queued.size < needed) return emptyList()
+        if (queued.size < mode.minPlayers) return emptyList()
 
         val proposals = mutableListOf<MatchProposal>()
         val taken = mutableSetOf<String>()
@@ -66,7 +64,25 @@ class BandedMmrMatchFunction : MatchFunction {
             proposals += toProposal(group, mode)
         }
 
+        partial(mode, byWait.filter { it.id !in taken }, now)?.let { proposals += it }
         return proposals
+    }
+
+    /**
+     * An under-filled free-for-all from whoever is left, once the longest-waiting of them has waited
+     * [ModeConfig.fillSeconds] for a full one. Rating plays no part: a mode that would rather start
+     * short than wait has already said who it plays against matters less than playing at all.
+     */
+    private fun partial(mode: ModeConfig, left: List<Ticket>, now: Instant): MatchProposal? {
+        if (!mode.allowsPartial || left.size < mode.minPlayers) return null
+        if (waitSeconds(left.first(), now) < mode.fillSeconds) return null
+        val group = left.take(mode.playersPerMatch)
+        val mus = group.map { it.mu }
+        return MatchProposal(
+            matchId = UUID.randomUUID().toString(),
+            teams = group.map { listOf(it.id) },
+            quality = (mus.maxOrNull() ?: 0.0) - (mus.minOrNull() ?: 0.0),
+        )
     }
 
     private fun gather(

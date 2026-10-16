@@ -154,6 +154,22 @@ data class UpsertQueueRequestBody(
         nullable = true,
     )
     val fleetName: String? = null,
+    @get:Schema(
+        description =
+            "The fewest players a match may start with. Omit for teamSize * teamCount, which " +
+                "always waits for a full match. Lower only for a free-for-all (teamSize 1): " +
+                "after fillSeconds an under-filled match forms from whoever is queued, as long " +
+                "as that is at least this many.",
+        nullable = true,
+    )
+    val minPlayers: Int? = null,
+    @get:Schema(
+        description =
+            "How long the longest-waiting player waits for a full match before an " +
+                "under-filled one forms. Ignored unless minPlayers is lowered.",
+        nullable = true,
+    )
+    val fillSeconds: Int? = null,
 )
 
 @Schema(

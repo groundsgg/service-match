@@ -232,16 +232,20 @@ class ValkeyQueue @Inject constructor(private val redis: RedisDataSource) {
                 // Appended, never inserted: the fields are positional and rows
                 // written before this existed are still out there. See decodeMode.
                 config.fleetName.orEmpty(),
+                config.minPlayers,
+                config.fillSeconds,
             )
             .joinToString("|")
     }
 
     private fun decodeMode(modeId: String, encoded: String): ModeConfig {
         val f = encoded.split("|")
+        val teamSize = f[0].toInt()
+        val teamCount = f[1].toInt()
         return ModeConfig(
             modeId = modeId,
-            teamSize = f[0].toInt(),
-            teamCount = f[1].toInt(),
+            teamSize = teamSize,
+            teamCount = teamCount,
             ranked = f[2].toBoolean(),
             band =
                 BandConfig(
@@ -256,6 +260,10 @@ class ValkeyQueue @Inject constructor(private val redis: RedisDataSource) {
             // for the modes that do not. Both mean "the fleet is named after the
             // mode", which is what ModeConfig.fleet falls back to.
             fleetName = f.getOrNull(9)?.takeIf { it.isNotBlank() },
+            // Absent in rows written before modes could start under-filled: those
+            // always wait for a full match.
+            minPlayers = f.getOrNull(10)?.toInt() ?: (teamSize * teamCount),
+            fillSeconds = f.getOrNull(11)?.toInt() ?: 0,
         )
     }
 

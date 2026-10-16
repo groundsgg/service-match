@@ -61,7 +61,7 @@ constructor(
         // to do it on the write path.
         metrics.ensureQueueDepthGauge(mode.modeId) { queue.queueDepth(mode.modeId) }
 
-        val needed = mode.playersPerMatch
+        val needed = mode.minPlayers
         // Cheap early out: most ticks on most modes have nobody waiting.
         if (queue.queueDepth(mode.modeId) < needed) return 0
 

@@ -150,4 +150,51 @@ class BandedMmrMatchFunctionTest {
         val allIds = proposals.flatMap { it.ticketIds }
         assertEquals(allIds.size, allIds.toSet().size, "no ticket may appear in two proposals")
     }
+
+    private val ffa =
+        ModeConfig(modeId = "ffa", teamSize = 1, teamCount = 8, minPlayers = 1, fillSeconds = 20)
+
+    @Test
+    fun `an under-filled free-for-all waits out the fill time`() {
+        val tickets = listOf(ticket("a", 25.0, waitedSeconds = 19), ticket("b", 25.0))
+        assertTrue(fn.propose(ffa, tickets, now).isEmpty())
+    }
+
+    @Test
+    fun `an under-filled free-for-all forms once the oldest has waited the fill time`() {
+        val tickets = listOf(ticket("a", 25.0, waitedSeconds = 20), ticket("b", 40.0))
+        val proposals = fn.propose(ffa, tickets, now)
+        assertEquals(1, proposals.size)
+        assertEquals(listOf(listOf("a"), listOf("b")), proposals[0].teams)
+    }
+
+    @Test
+    fun `a single player is a match when the mode allows one`() {
+        val proposals = fn.propose(ffa, listOf(ticket("a", 25.0, waitedSeconds = 30)), now)
+        assertEquals(listOf(listOf("a")), proposals.single().teams)
+    }
+
+    @Test
+    fun `a full free-for-all does not wait for the fill time`() {
+        val tickets = (1..8).map { ticket("t$it", 25.0, sigma = 8.33) }
+        val proposals = fn.propose(ffa, tickets, now)
+        assertEquals(1, proposals.size)
+        assertEquals(8, proposals[0].ticketIds.size)
+    }
+
+    @Test
+    fun `an under-filled match never takes more than a full one holds`() {
+        // Twelve far apart so no full match bands together; the partial is capped at eight.
+        val tickets =
+            (1..12).map { ticket("t$it", it * 10.0, waitedSeconds = 30L - it) }
+        val proposals = fn.propose(ffa.copy(fillSeconds = 0), tickets, now)
+        assertEquals(8, proposals.single().ticketIds.size)
+        assertEquals("t1", proposals.single().ticketIds.first(), "the oldest goes first")
+    }
+
+    @Test
+    fun `a mode that has not lowered its minimum never forms a short match`() {
+        val tickets = listOf(ticket("a", 25.0, waitedSeconds = 600))
+        assertTrue(fn.propose(ModeConfig("ffa", 1, 8, fillSeconds = 0), tickets, now).isEmpty())
+    }
 }
