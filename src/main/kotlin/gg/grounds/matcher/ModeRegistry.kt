@@ -3,6 +3,7 @@ package gg.grounds.matcher
 import gg.grounds.domain.BandConfig
 import gg.grounds.domain.ModeConfig
 import gg.grounds.persistence.ValkeyQueue
+import io.quarkus.runtime.LaunchMode
 import io.quarkus.runtime.StartupEvent
 import jakarta.annotation.Priority
 import jakarta.enterprise.context.ApplicationScoped
@@ -39,14 +40,33 @@ class ModeRegistry @Inject constructor(private val persistence: ValkeyQueue) {
 
     fun all(): Collection<ModeConfig> = modes.values
 
+    /** Forget a mode this replica just removed, without waiting for the next [resync]. */
+    fun remove(modeId: String) {
+        modes.remove(modeId)
+    }
+
+    /**
+     * Make this replica's map match Valkey: add what was registered elsewhere, drop what was
+     * removed elsewhere. Without the drop, a mode whose last lease expired on another replica would
+     * keep being ticked — and keep accepting enqueues — here.
+     */
+    fun resync() {
+        val persisted = persistence.loadModes().associateBy { it.modeId }
+        modes.keys.retainAll(persisted.keys)
+        modes.putAll(persisted)
+    }
+
     /**
      * Seeds a 1v1 duel mode for local dev, so the service is useful before forge has pushed
      * anything. A no-op once "duel" is already registered — including by a persisted mode loaded a
      * moment ago — so this can never clobber a real config with the dev placeholder.
+     *
+     * Persisted (only if absent) rather than held in memory, because [resync] makes Valkey the
+     * source of truth: a seed that lived only here would be dropped on the first tick.
      */
     fun seedDuelForDev() {
         if (modes.containsKey("duel")) return
-        upsert(
+        val seed =
             ModeConfig(
                 modeId = "duel",
                 teamSize = 1,
@@ -54,7 +74,7 @@ class ModeRegistry @Inject constructor(private val persistence: ValkeyQueue) {
                 ranked = true,
                 band = BandConfig(),
             )
-        )
+        if (persistence.saveModeIfAbsent(seed)) upsert(seed)
     }
 
     /**
@@ -76,7 +96,9 @@ class ModeRegistry @Inject constructor(private val persistence: ValkeyQueue) {
     ) {
         val persisted = persistence.loadModes()
         persisted.forEach { upsert(it) }
-        seedDuelForDev()
+        // Only where nobody pushes modes for real. In production a phantom "duel" would show up in
+        // the lobby's mode list.
+        if (LaunchMode.current().isDevOrTest) seedDuelForDev()
         log.info("Loaded ${persisted.size} persisted mode(s) from Valkey")
     }
 

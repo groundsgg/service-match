@@ -1,7 +1,12 @@
 package gg.grounds.persistence
 
+import com.fasterxml.jackson.databind.DeserializationFeature
+import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
+import com.fasterxml.jackson.module.kotlin.readValue
 import gg.grounds.domain.BandConfig
 import gg.grounds.domain.ModeConfig
+import gg.grounds.domain.ModeLease
+import gg.grounds.domain.ModeMeta
 import gg.grounds.domain.ServerAssignment
 import gg.grounds.domain.Ticket
 import gg.grounds.domain.TicketState
@@ -137,6 +142,13 @@ class ValkeyQueue @Inject constructor(private val redis: RedisDataSource) {
             args = listOf(ticketId, playerId),
         ) == 1L
 
+    /**
+     * Fail a match whose mode is gone and cancel its tickets, releasing the players' guards. Unlike
+     * [failRequeue], nothing goes back into a queue nobody matches any more.
+     */
+    fun failCancel(matchId: String): Long =
+        eval("fail_cancel", keys = listOf(matchKey(matchId), LIVE_MATCHES), args = listOf(matchId))
+
     /** Put a failed match's tickets back, keeping the waiting time they earned. */
     fun failRequeue(matchId: String, modeId: String): Long =
         eval(
@@ -209,6 +221,72 @@ class ValkeyQueue @Inject constructor(private val redis: RedisDataSource) {
         hashes.hset(MODES_KEY, config.modeId, encodeMode(config))
     }
 
+    /**
+     * Register a mode with its lobby metadata and, when [lease] is set, renew that lease — all in
+     * one script, so an expiry sweep on another replica can never see the row without the lease.
+     *
+     * @return true if the mode did not exist before.
+     */
+    fun upsertMode(config: ModeConfig, meta: ModeMeta, lease: ModeLease?, now: Instant): Boolean =
+        eval(
+            "upsert_mode",
+            keys = listOf(MODES_KEY, metaKey(config.modeId), leasesKey(config.modeId)),
+            args =
+                listOf(
+                    config.modeId,
+                    configFields(config).joinToString("|"),
+                    json.writeValueAsString(meta),
+                    lease?.leaseId.orEmpty(),
+                    lease?.let { now.plusSeconds(it.seconds.toLong()).toEpochMilli() }?.toString()
+                        ?: "0",
+                ),
+        ) == 1L
+
+    /**
+     * Drop the mode's expired leases, and remove the mode if it is leased and none are left.
+     *
+     * @return how many waiting tickets were cancelled, or null if the mode is still alive.
+     */
+    fun expireMode(modeId: String, now: Instant): Long? = removeMode(modeId, now, "expire", "")
+
+    /** Release one lease, removing the mode if it was the last. Same result as [expireMode]. */
+    fun releaseLease(modeId: String, leaseId: String, now: Instant): Long? =
+        removeMode(modeId, now, "release", leaseId)
+
+    /** Remove a mode whether permanent or leased. Null if it did not exist. */
+    fun deleteMode(modeId: String, now: Instant): Long? = removeMode(modeId, now, "delete", "")
+
+    private fun removeMode(modeId: String, now: Instant, action: String, leaseId: String): Long? =
+        eval(
+                "expire_mode",
+                keys =
+                    listOf(
+                        MODES_KEY,
+                        metaKey(modeId),
+                        leasesKey(modeId),
+                        ratingKey(modeId),
+                        waitKey(modeId),
+                    ),
+                args = listOf(modeId, now.toEpochMilli().toString(), action, leaseId),
+            )
+            .takeIf { it >= 0 }
+
+    /** A mode's lobby metadata; the defaults for a mode registered before metadata existed. */
+    fun loadMeta(modeId: String): ModeMeta =
+        redis.execute("GET", metaKey(modeId))?.toString()?.let { json.readValue<ModeMeta>(it) }
+            ?: ModeMeta()
+
+    /** Leases of the mode that have not expired at [now]. */
+    fun liveLeaseCount(modeId: String, now: Instant): Long =
+        redis.execute("ZCOUNT", leasesKey(modeId), "(${now.toEpochMilli()}", "+inf").toLong()
+
+    /**
+     * Persist [config] only if no mode of that id exists — for the dev seed, which must never
+     * clobber a real registration.
+     */
+    fun saveModeIfAbsent(config: ModeConfig): Boolean =
+        hashes.hsetnx(MODES_KEY, config.modeId, encodeMode(config))
+
     /** Every persisted mode, for the registry to reload at startup. */
     fun loadModes(): List<ModeConfig> =
         hashes.hgetall(MODES_KEY).map { (modeId, encoded) -> decodeMode(modeId, encoded) }
@@ -217,25 +295,28 @@ class ValkeyQueue @Inject constructor(private val redis: RedisDataSource) {
     fun loadMode(modeId: String): ModeConfig? =
         hashes.hget(MODES_KEY, modeId)?.let { decodeMode(modeId, it) }
 
-    private fun encodeMode(config: ModeConfig): String {
+    private fun encodeMode(config: ModeConfig): String =
+        (configFields(config) + (if (config.leased) "1" else "0")).joinToString("|")
+
+    /** Fields 0..11 of the encoded row; [encodeMode] and upsert_mode.lua append `leased`. */
+    private fun configFields(config: ModeConfig): List<Any> {
         val band = config.band
         return listOf(
-                config.teamSize,
-                config.teamCount,
-                config.ranked,
-                band.b0,
-                band.k,
-                band.w,
-                band.stepSeconds,
-                band.mercySeconds,
-                band.mutualSeconds,
-                // Appended, never inserted: the fields are positional and rows
-                // written before this existed are still out there. See decodeMode.
-                config.fleetName.orEmpty(),
-                config.minPlayers,
-                config.fillSeconds,
-            )
-            .joinToString("|")
+            config.teamSize,
+            config.teamCount,
+            config.ranked,
+            band.b0,
+            band.k,
+            band.w,
+            band.stepSeconds,
+            band.mercySeconds,
+            band.mutualSeconds,
+            // Appended, never inserted: the fields are positional and rows
+            // written before this existed are still out there. See decodeMode.
+            config.fleetName.orEmpty(),
+            config.minPlayers,
+            config.fillSeconds,
+        )
     }
 
     private fun decodeMode(modeId: String, encoded: String): ModeConfig {
@@ -264,6 +345,8 @@ class ValkeyQueue @Inject constructor(private val redis: RedisDataSource) {
             // always wait for a full match.
             minPlayers = f.getOrNull(10)?.toInt() ?: (teamSize * teamCount),
             fillSeconds = f.getOrNull(11)?.toInt() ?: 0,
+            // Absent in rows written before leases existed: those modes are permanent.
+            leased = f.getOrNull(12) == "1",
         )
     }
 
@@ -275,9 +358,24 @@ class ValkeyQueue @Inject constructor(private val redis: RedisDataSource) {
         redis.sortedSet(String::class.java, String::class.java)
     }
 
+    // Tolerant of fields it does not know, so a newer replica's metadata does not break an older
+    // one mid-rollout.
+    private val json =
+        jacksonObjectMapper().configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false)
+
     companion object {
         private val log: Logger = Logger.getLogger(ValkeyQueue::class.java)
-        private val SCRIPTS = listOf("enqueue", "claim", "assign", "cancel", "fail_requeue")
+        private val SCRIPTS =
+            listOf(
+                "enqueue",
+                "claim",
+                "assign",
+                "cancel",
+                "fail_requeue",
+                "fail_cancel",
+                "upsert_mode",
+                "expire_mode",
+            )
 
         const val ALLOC_STREAM = "mm:alloc"
 
@@ -296,5 +394,11 @@ class ValkeyQueue @Inject constructor(private val redis: RedisDataSource) {
         fun ratingKey(modeId: String) = "mm:q:$modeId:rating"
 
         fun waitKey(modeId: String) = "mm:q:$modeId:wait"
+
+        /** A mode's lobby metadata, as JSON. */
+        fun metaKey(modeId: String) = "mm:mode:$modeId:meta"
+
+        /** A mode's leases: member = lease id, score = expiry in epoch millis. */
+        fun leasesKey(modeId: String) = "mm:mode:$modeId:leases"
     }
 }

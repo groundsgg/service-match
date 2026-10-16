@@ -75,6 +75,13 @@ data class ModeConfig(
      * least [minPlayers] forms. Ignored while [minPlayers] is [playersPerMatch].
      */
     val fillSeconds: Int = 0,
+    /**
+     * Whether the mode lives on leases rather than forever. A mode becomes leased the first time a
+     * game server registers it with a lease id, and from then on exists only while at least one of
+     * those leases is unexpired. False for a mode only ever registered without one — forge's
+     * deploy-time push, and every row written before leases existed.
+     */
+    val leased: Boolean = false,
 ) {
     /** Players in a full match, and the most a match can hold. */
     val playersPerMatch: Int
@@ -88,6 +95,34 @@ data class ModeConfig(
     val fleet: String
         get() = fleetName?.takeIf { it.isNotBlank() } ?: modeId
 }
+
+/**
+ * What the lobby shows for a mode, separate from how it is matched. Last writer wins: every
+ * registration replaces it whole.
+ */
+data class ModeMeta(
+    /** Null means the mode id is shown. */
+    val displayName: String? = null,
+    /** A Minecraft item key, e.g. `minecraft:iron_sword`. */
+    val icon: String? = null,
+    /** The stat boards the game writes as `<modeId>.<stat>`. The first is the default. */
+    val boards: List<StatBoard> = emptyList(),
+    /** Whether a disconnected player may rejoin a running match. */
+    val rejoinEnabled: Boolean = false,
+)
+
+data class StatBoard(val stat: String, val displayName: String)
+
+/** One game server's claim that a mode is still being served, until [seconds] from now. */
+data class ModeLease(val leaseId: String, val seconds: Int)
+
+/** A live mode as listed to the lobby: its config, what to show, and how alive it is. */
+data class ModeSummary(
+    val config: ModeConfig,
+    val meta: ModeMeta,
+    val ticketsQueued: Long,
+    val leases: Long,
+)
 
 /**
  * How wide a net a ticket casts, and how that widens as it waits.

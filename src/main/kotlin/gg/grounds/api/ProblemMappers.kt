@@ -51,6 +51,12 @@ class UnknownTicketMapper : ExceptionMapper<UnknownTicketException> {
         problem(404, "Unknown ticket", exception.message, "unknown_ticket")
 }
 
+@Provider
+class AdminRequiredMapper : ExceptionMapper<AdminRequiredException> {
+    override fun toResponse(exception: AdminRequiredException): Response =
+        problem(403, "Admin required", exception.message, "admin_required")
+}
+
 /**
  * Argument validation, as thrown by the resources before anything is queued or rated. Kept out of
  * the domain so it never has to know about HTTP.
