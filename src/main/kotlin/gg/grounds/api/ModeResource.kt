@@ -69,6 +69,16 @@ class ModeResource @Inject constructor(private val queue: QueueService) {
         if (teamSize < 1 || teamCount < 2) {
             throw InvalidRequestException("a match needs teamSize >= 1 and teamCount >= 2")
         }
+        val minPlayers = request.minPlayers ?: (teamSize * teamCount)
+        if (minPlayers < 1 || minPlayers > teamSize * teamCount) {
+            throw InvalidRequestException("minPlayers must be between 1 and teamSize * teamCount")
+        }
+        if (minPlayers < teamSize * teamCount && teamSize != 1) {
+            // An under-filled team match would need someone to decide who plays short-handed.
+            throw InvalidRequestException("only a free-for-all (teamSize 1) may lower minPlayers")
+        }
+        val fillSeconds = request.fillSeconds ?: 0
+        if (fillSeconds < 0) throw InvalidRequestException("fillSeconds must not be negative")
 
         val config =
             ModeConfig(
@@ -78,12 +88,15 @@ class ModeResource @Inject constructor(private val queue: QueueService) {
                 ranked = request.ranked,
                 band = (request.band ?: BandRequestBody()).toDomain(),
                 fleetName = request.fleetName?.trim()?.takeIf { it.isNotEmpty() },
+                minPlayers = minPlayers,
+                fillSeconds = fillSeconds,
             )
 
         val created = queue.upsertMode(config)
         log.info(
             "Upserted mode (id=$id, ${config.teamCount}x${config.teamSize}, " +
-                "ranked=${config.ranked}, fleet=${config.fleet}, created=$created)"
+                "min=${config.minPlayers}, fill=${config.fillSeconds}s, ranked=${config.ranked}, " +
+                "fleet=${config.fleet}, created=$created)"
         )
         return UpsertQueueResponse(created)
     }

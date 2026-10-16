@@ -381,6 +381,60 @@ class MatchRestApiTest {
             .body("code", equalTo("invalid_request"))
     }
 
+    @Test
+    fun `a free-for-all can start with fewer players`() {
+        whenever(queue.upsertMode(any())).thenReturn(true)
+
+        given()
+            .contentType(ContentType.JSON)
+            .body("""{"teamSize":1,"teamCount":8,"minPlayers":1,"fillSeconds":20}""")
+            .put("/v1/match/modes/$MODE/queue")
+            .then()
+            .statusCode(200)
+
+        val captor = argumentCaptor<ModeConfig>()
+        verify(queue).upsertMode(captor.capture())
+        assert(captor.firstValue.minPlayers == 1 && captor.firstValue.fillSeconds == 20)
+    }
+
+    @Test
+    fun `an upsert without a minimum always waits for a full match`() {
+        whenever(queue.upsertMode(any())).thenReturn(true)
+
+        given()
+            .contentType(ContentType.JSON)
+            .body("""{"teamSize":2,"teamCount":2}""")
+            .put("/v1/match/modes/$MODE/queue")
+            .then()
+            .statusCode(200)
+
+        val captor = argumentCaptor<ModeConfig>()
+        verify(queue).upsertMode(captor.capture())
+        assert(captor.firstValue.minPlayers == 4 && !captor.firstValue.allowsPartial)
+    }
+
+    @Test
+    fun `a team mode may not lower its minimum`() {
+        given()
+            .contentType(ContentType.JSON)
+            .body("""{"teamSize":2,"teamCount":2,"minPlayers":2}""")
+            .put("/v1/match/modes/$MODE/queue")
+            .then()
+            .statusCode(400)
+            .body("code", equalTo("invalid_request"))
+    }
+
+    @Test
+    fun `a minimum above a full match is refused`() {
+        given()
+            .contentType(ContentType.JSON)
+            .body("""{"teamSize":1,"teamCount":2,"minPlayers":3}""")
+            .put("/v1/match/modes/$MODE/queue")
+            .then()
+            .statusCode(400)
+            .body("code", equalTo("invalid_request"))
+    }
+
     // -----------------------------------------------------------
     // POST /v1/match/matches/{id}/result
     // -----------------------------------------------------------
