@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.4.0](https://github.com/groundsgg/service-match/compare/v1.3.0...v1.4.0) (2026-10-16)
+
+
+### Features
+
+* **modes:** lease-based dynamic game modes ([#71](https://github.com/groundsgg/service-match/issues/71)) ([c93dec9](https://github.com/groundsgg/service-match/commit/c93dec99e144deba8440a031d6d0ee60b5afd9f8))
+
 ## [1.3.0](https://github.com/groundsgg/service-match/compare/v1.2.0...v1.3.0) (2026-10-16)
 
 
