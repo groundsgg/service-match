@@ -1,0 +1,10 @@
+# Plugin and platform share this version. Dependabot updates the single entry,
+# so the Gradle plugin and the BOM cannot drift apart.
+[versions]
+quarkus = "3.30.8"
+
+[plugins]
+quarkus = { id = "io.quarkus", version.ref = "quarkus" }
+
+[libraries]
+quarkus-bom = { module = "io.quarkus.platform:quarkus-bom", version.ref = "quarkus" }

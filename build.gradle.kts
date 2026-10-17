@@ -2,7 +2,7 @@ import org.gradle.api.tasks.Copy
 
 plugins {
     id("gg.grounds.root") version "0.1.1"
-    id("io.quarkus") version "3.30.6"
+    alias(libs.plugins.quarkus)
 }
 
 tasks.register<Copy>("generateOpenApiSnapshot") {
@@ -34,7 +34,7 @@ repositories {
 configurations.all { resolutionStrategy.cacheChangingModulesFor(0, "seconds") }
 
 dependencies {
-    implementation(enforcedPlatform("io.quarkus.platform:quarkus-bom:3.30.8"))
+    implementation(enforcedPlatform(libs.quarkus.bom))
     implementation("io.quarkus:quarkus-arc")
     // No gRPC is served or dialled by this service any more, but the extension
     // still owns the protoc codegen that `quarkus.generate-code.grpc.scan-for-proto`
