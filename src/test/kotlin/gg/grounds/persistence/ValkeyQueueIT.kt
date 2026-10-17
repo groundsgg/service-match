@@ -19,7 +19,7 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.testcontainers.containers.GenericContainer
-import org.testcontainers.containers.PostgreSQLContainer
+import org.testcontainers.postgresql.PostgreSQLContainer
 import org.testcontainers.utility.DockerImageName
 
 /**
@@ -424,7 +424,7 @@ class ValkeyQueueIT {
      * these tests never touch it.
      */
     class PostgresResource : QuarkusTestResourceLifecycleManager {
-        private lateinit var container: PostgreSQLContainer<*>
+        private lateinit var container: PostgreSQLContainer
 
         override fun start(): Map<String, String> {
             container = PostgreSQLContainer(DockerImageName.parse("postgres:16-alpine"))
