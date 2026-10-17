@@ -5,6 +5,14 @@ updates:
     directory: "/"
     schedule:
       interval: "daily"
+    groups:
+      # One PR for the shared Quarkus version in gradle/libs.versions.toml.
+      # Separate plugin and BOM bumps fail the build.
+      quarkus:
+        patterns:
+          - "io.quarkus"
+          - "io.quarkus:io.quarkus.gradle.plugin"
+          - "io.quarkus.platform:quarkus-bom"
   # Monitor GitHub Actions
   - package-ecosystem: "github-actions"
     directory: "/"
