@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.0](https://github.com/groundsgg/service-match/compare/v1.4.0...v1.5.0) (2026-10-17)
+
+
+### Features
+
+* **timeline:** match timeline metrics, push headers and trace ([#73](https://github.com/groundsgg/service-match/issues/73)) ([c95d60e](https://github.com/groundsgg/service-match/commit/c95d60e03e723055d4f86fb9b642d13d1b18c096))
+
 ## [1.4.0](https://github.com/groundsgg/service-match/compare/v1.3.0...v1.4.0) (2026-10-16)
 
 
