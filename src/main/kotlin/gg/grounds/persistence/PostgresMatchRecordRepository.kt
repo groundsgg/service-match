@@ -67,6 +67,24 @@ class PostgresMatchRecordRepository @Inject constructor(private val dataSource: 
                 }
         }
 
+    override fun takenShortIds(shortIds: Collection<String>): Set<String> {
+        if (shortIds.isEmpty()) return emptySet()
+        dataSource.connection.use { c ->
+            c.prepareStatement(
+                    "SELECT left(match_id::text, 8) FROM match_record " +
+                        "WHERE left(match_id::text, 8) = ANY(?)"
+                )
+                .use { ps ->
+                    ps.setArray(1, c.createArrayOf("text", shortIds.toTypedArray()))
+                    ps.executeQuery().use { rs ->
+                        val taken = mutableSetOf<String>()
+                        while (rs.next()) taken += rs.getString(1)
+                        return taken
+                    }
+                }
+        }
+    }
+
     /**
      * One transaction, deliberately.
      *

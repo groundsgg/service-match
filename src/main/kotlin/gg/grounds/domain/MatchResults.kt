@@ -29,6 +29,9 @@ interface MatchRecordRepository {
 
     fun findMatch(matchId: UUID): MatchRecord?
 
+    /** Which of these short ids (see [shortMatchId]) a recorded match already has. */
+    fun takenShortIds(shortIds: Collection<String>): Set<String>
+
     /**
      * Apply a result: write the rating deltas and move the players' ratings, in one transaction.
      *
