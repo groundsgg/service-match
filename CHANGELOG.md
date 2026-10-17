@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.7.0](https://github.com/groundsgg/service-match/compare/v1.6.0...v1.7.0) (2026-10-17)
+
+
+### Features
+
+* **db:** run Flyway on a direct migrations datasource ([#84](https://github.com/groundsgg/service-match/issues/84)) ([09cee0b](https://github.com/groundsgg/service-match/commit/09cee0b3574399ecf9c2e08fd77b2c781a555f2c))
+
 ## [1.6.0](https://github.com/groundsgg/service-match/compare/v1.5.0...v1.6.0) (2026-10-17)
 
 
