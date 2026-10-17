@@ -24,8 +24,8 @@ import org.eclipse.microprofile.openapi.annotations.tags.Tag
  * again, through whichever proxy they log back in on.
  *
  * A proxy only remembers the players it holds, and a reconnect is dealt to any proxy. So the
- * assignment itself records where each player went (assign.lua), and this is where a proxy reads
- * it back. The match ending, the player leaving it, and the rejoin grace running out all remove it.
+ * assignment itself records where each player went (assign.lua), and this is where a proxy reads it
+ * back. The match ending, the player leaving it, and the rejoin grace running out all remove it.
  */
 @Path("/v1/match/players/{playerId}/match")
 @Produces(MediaType.APPLICATION_JSON)

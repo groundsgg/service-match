@@ -98,8 +98,7 @@ data class AssignmentResponse(
 @Schema(description = "The match a player is playing, for a proxy offering them a rejoin.")
 data class ActiveMatchResponse(
     val matchId: String,
-    @get:Schema(description = "Mode within the project.", examples = ["duel"])
-    val modeId: String,
+    @get:Schema(description = "Mode within the project.", examples = ["duel"]) val modeId: String,
     @get:Schema(description = "The GameServer, as the proxy has it registered.")
     val gameServerName: String,
 ) {

@@ -41,8 +41,7 @@ constructor(
     @param:ConfigProperty(name = "grounds.match.rating.default-mu") private val defaultMu: Double,
     @param:ConfigProperty(name = "grounds.match.rating.default-sigma")
     private val defaultSigma: Double,
-    @param:ConfigProperty(name = "grounds.match.rejoin.grace-seconds")
-    private val rejoinGrace: Long,
+    @param:ConfigProperty(name = "grounds.match.rejoin.grace-seconds") private val rejoinGrace: Long,
 ) {
 
     fun enqueue(playerId: UUID, modeId: String): Ticket {
