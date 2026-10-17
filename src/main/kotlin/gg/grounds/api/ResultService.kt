@@ -9,6 +9,7 @@ import gg.grounds.domain.RatingTransition
 import gg.grounds.domain.ResultOutcome
 import gg.grounds.domain.TeamResult
 import gg.grounds.leaderboard.LeaderboardClient
+import gg.grounds.persistence.ValkeyQueue
 import jakarta.enterprise.context.ApplicationScoped
 import jakarta.inject.Inject
 import java.util.UUID
@@ -40,6 +41,7 @@ constructor(
     private val ratings: RatingRepository,
     private val calculator: RatingCalculator,
     private val leaderboard: LeaderboardClient,
+    private val queue: ValkeyQueue,
     @param:ConfigProperty(name = "grounds.match.rating.default-mu") private val defaultMu: Double,
     @param:ConfigProperty(name = "grounds.match.rating.default-sigma")
     private val defaultSigma: Double,
@@ -84,6 +86,15 @@ constructor(
                 ratedUpdates = transitions,
                 terminationReason = terminationReason,
             )
+
+        // The match is over, so no proxy may offer it as a rejoin any more. Like the
+        // leaderboard below, this sits on top of a committed result: a Valkey hiccup
+        // costs a stale offer for at most the match TTL, never the result itself.
+        try {
+            queue.endActive(matchId.toString(), match.playerIds.map(UUID::toString))
+        } catch (e: Exception) {
+            log.warn("Could not clear the players' active match (match=$matchId)", e)
+        }
 
         // The result is already committed by the time we get here — applyResult
         // has returned. The leaderboard is a nice-to-have on top of a result that

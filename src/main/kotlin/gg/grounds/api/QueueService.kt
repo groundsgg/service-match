@@ -41,6 +41,8 @@ constructor(
     @param:ConfigProperty(name = "grounds.match.rating.default-mu") private val defaultMu: Double,
     @param:ConfigProperty(name = "grounds.match.rating.default-sigma")
     private val defaultSigma: Double,
+    @param:ConfigProperty(name = "grounds.match.rejoin.grace-seconds")
+    private val rejoinGrace: Long,
 ) {
 
     fun enqueue(playerId: UUID, modeId: String): Ticket {
@@ -106,6 +108,25 @@ constructor(
     fun findTicket(ticketId: String): Ticket? = queue.findTicket(ticketId)
 
     fun queueDepth(modeId: String): Long = queue.queueDepth(modeId)
+
+    /** The assigned ticket of the match [playerId] is playing, for a proxy offering a rejoin. */
+    fun activeMatch(playerId: UUID): Ticket? = queue.activeTicket(playerId.toString())
+
+    /** [playerId] left their match for good: no proxy offers it to them again. */
+    fun leaveMatch(playerId: UUID) = queue.clearActive(playerId.toString())
+
+    /**
+     * [playerId] dropped off the network ([connected] false) or is back in their match (true).
+     *
+     * A disconnected player keeps their match for the rejoin grace only — after that a login no
+     * longer offers it. Back in the match, the entry lives as long as the match again, so a second
+     * drop later in the game gets the full grace too.
+     *
+     * @return false if the player has no active match.
+     */
+    fun matchPresence(playerId: UUID, connected: Boolean): Boolean =
+        if (connected) queue.keepActive(playerId.toString())
+        else queue.expireActive(playerId.toString(), rejoinGrace)
 
     fun isKnownMode(modeId: String): Boolean = modes.find(modeId) != null
 
