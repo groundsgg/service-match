@@ -2,6 +2,7 @@ package gg.grounds.matcher
 
 import gg.grounds.domain.BandedMmrMatchFunction
 import gg.grounds.domain.MatchFunction
+import gg.grounds.domain.MatchProposal
 import gg.grounds.domain.MatchRecordRepository
 import gg.grounds.domain.ModeConfig
 import gg.grounds.domain.Ticket
@@ -13,6 +14,7 @@ import jakarta.enterprise.context.ApplicationScoped
 import jakarta.inject.Inject
 import java.time.Duration
 import java.time.Instant
+import java.util.UUID
 import org.eclipse.microprofile.config.inject.ConfigProperty
 import org.jboss.logging.Logger
 
@@ -92,7 +94,7 @@ constructor(
         val tickets = snapshot(mode)
         if (tickets.size < needed) return 0
 
-        val proposals = matchFunction.propose(mode, tickets, now)
+        val proposals = withUniqueShortIds(matchFunction.propose(mode, tickets, now))
         var committed = 0
 
         val byId = tickets.associateBy { it.id }
@@ -135,6 +137,41 @@ constructor(
             }
         }
         return committed
+    }
+
+    /**
+     * Re-roll every proposal whose short id a recorded match, or another proposal, already has.
+     *
+     * The short id is what players read off the scoreboard and what prism and the map page resolve,
+     * so it has to name one match. One query per tick that formed proposals; if Postgres does not
+     * answer, the ids go out unchecked, because players would rather play than wait on it.
+     */
+    private fun withUniqueShortIds(proposals: List<MatchProposal>): List<MatchProposal> {
+        if (proposals.isEmpty()) return proposals
+        var result = proposals
+        repeat(MAX_SHORT_ID_ROLLS) {
+            val taken =
+                try {
+                    matches.takenShortIds(result.map { it.shortId })
+                } catch (e: Exception) {
+                    log.warn("Could not check match short ids; claiming them unchecked", e)
+                    return result
+                }
+            val seen = mutableSetOf<String>()
+            var rerolled = false
+            result =
+                result.map { proposal ->
+                    if (proposal.shortId !in taken && seen.add(proposal.shortId)) {
+                        proposal
+                    } else {
+                        rerolled = true
+                        proposal.copy(matchId = UUID.randomUUID().toString())
+                    }
+                }
+            if (!rerolled) return result
+        }
+        log.warn("Match short ids still collide after $MAX_SHORT_ID_ROLLS rolls; claiming anyway")
+        return result
     }
 
     /**
@@ -204,6 +241,12 @@ constructor(
 
     companion object {
         private val log: Logger = Logger.getLogger(Matcher::class.java)
+
+        /**
+         * Even with a million recorded matches a fresh short id collides about once in 4,000 draws,
+         * so a third roll is all but never needed.
+         */
+        private const val MAX_SHORT_ID_ROLLS = 3
 
         /**
          * How many of the longest-waiting tickets a tick considers. A cap keeps the tick bounded on

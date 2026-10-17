@@ -57,7 +57,16 @@ data class MatchTimeline(
 data class MatchProposal(val matchId: String, val teams: List<List<String>>, val quality: Double) {
     val ticketIds: List<String>
         get() = teams.flatten()
+
+    val shortId: String
+        get() = shortMatchId(matchId)
 }
+
+/**
+ * The first 8 hex characters of a match id. Games show it on the scoreboard and prism resolves it,
+ * so the matcher keeps it unique among recorded matches.
+ */
+fun shortMatchId(matchId: String): String = matchId.take(8)
 
 /** Per-mode matchmaking configuration, pushed by forge from `grounds.yaml`. */
 data class ModeConfig(
