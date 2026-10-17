@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.6.0](https://github.com/groundsgg/service-match/compare/v1.5.0...v1.6.0) (2026-10-17)
+
+
+### Features
+
+* **api:** look up the match a player is playing, for a rejoin from any proxy ([#82](https://github.com/groundsgg/service-match/issues/82)) ([ec9110f](https://github.com/groundsgg/service-match/commit/ec9110f207756d4be89fbe2a646f3aa561477500))
+* keep the 8-character match short id unique ([#83](https://github.com/groundsgg/service-match/issues/83)) ([9c437fe](https://github.com/groundsgg/service-match/commit/9c437fe90d562ac48f896ab95af5d55b42de1017))
+
+
+### Bug Fixes
+
+* **build:** resolve dependencies through the runner mirror in Docker builds ([#75](https://github.com/groundsgg/service-match/issues/75)) ([852900c](https://github.com/groundsgg/service-match/commit/852900c5a490cffe6c57def8020f73358d041431))
+
 ## [1.5.0](https://github.com/groundsgg/service-match/compare/v1.4.0...v1.5.0) (2026-10-17)
 
 
