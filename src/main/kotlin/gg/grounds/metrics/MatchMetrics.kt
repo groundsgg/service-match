@@ -65,7 +65,38 @@ class MatchMetrics @Inject constructor(private val registry: MeterRegistry) {
      * "how long people put up with the queue".
      */
     fun queueWait(mode: String, waited: Duration) {
-        registry.timer("match.queue.wait", "mode", mode).record(waited)
+        timeline("match.queue.wait", waited, "mode", mode)
+    }
+
+    /**
+     * The match timeline: where the seconds between "queue" and "playing" go. The three phases this
+     * service owns are recorded here, the rest by the game server, all with [TIMELINE_BUCKETS] so a
+     * dashboard can stack and compare them per mode. The names are a contract with that dashboard;
+     * Prometheus renders them as `grounds_match_time_to_*_seconds`.
+     *
+     * Time to match is per player — ticket enqueued to the claim that formed the match. It is the
+     * same measurement as [queueWait], which keeps its name for the dashboards already reading it.
+     */
+    fun timeToMatch(mode: String, waited: Duration) {
+        timeline("grounds.match.time.to.match", waited, "mode", mode)
+    }
+
+    /** Match formed to a GameServer allocated for it (`result=ok`) or none to be had (`failed`). */
+    fun timeToAllocate(mode: String, result: String, took: Duration) {
+        timeline("grounds.match.time.to.allocate", took, "mode", mode, "result", result)
+    }
+
+    /** The StartMatch request: sent to the game server until it accepted (`ok`) or did not. */
+    fun timeToPush(mode: String, result: String, took: Duration) {
+        timeline("grounds.match.time.to.push", took, "mode", mode, "result", result)
+    }
+
+    private fun timeline(name: String, took: Duration, vararg tags: String) {
+        Timer.builder(name)
+            .tags(*tags)
+            .serviceLevelObjectives(*TIMELINE_BUCKETS)
+            .register(registry)
+            .record(took)
     }
 
     /**
@@ -112,5 +143,36 @@ class MatchMetrics @Inject constructor(private val registry: MeterRegistry) {
                 .tag("mode", mode)
                 .register(registry)
         }
+    }
+
+    companion object {
+        /**
+         * The one bucket layout every timeline histogram shares, in seconds — here and on the game
+         * server alike, so phases can be compared bucket for bucket. Explicit rather than a
+         * percentile histogram: that would be ~70 buckets per series for no better answer.
+         */
+        val TIMELINE_BUCKETS: Array<Duration> =
+            doubleArrayOf(
+                    0.1,
+                    0.25,
+                    0.5,
+                    1.0,
+                    2.0,
+                    3.0,
+                    5.0,
+                    7.5,
+                    10.0,
+                    15.0,
+                    20.0,
+                    30.0,
+                    45.0,
+                    60.0,
+                    90.0,
+                    120.0,
+                    180.0,
+                    300.0,
+                )
+                .map { Duration.ofMillis((it * 1000).toLong()) }
+                .toTypedArray()
     }
 }

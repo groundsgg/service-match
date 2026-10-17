@@ -6,9 +6,11 @@ import gg.grounds.events.NatsConnector
 import gg.grounds.grpc.match.MatchTeam
 import gg.grounds.grpc.match.StartMatchReply
 import gg.grounds.grpc.match.StartMatchRequest
+import io.nats.client.impl.Headers
 import jakarta.enterprise.context.ApplicationScoped
 import jakarta.inject.Inject
 import java.time.Duration
+import java.time.Instant
 import org.eclipse.microprofile.config.inject.ConfigProperty
 import org.jboss.logging.Logger
 
@@ -43,12 +45,19 @@ constructor(
      * A refusal, a timeout and an unreachable server are all the same answer here: *this match is
      * not going to start on this server*. The caller puts the players back on the queue with the
      * wait they had earned rather than leaving them in a match that will never begin.
+     *
+     * The match timeline rides along as NATS headers rather than in the proto, so a game server
+     * that does not read them is unaffected: [enqueuedAt] (each roster player's ticket enqueue),
+     * [formedAt] and the [traceparent] of the match trace. Whatever is missing is left out.
      */
     fun startMatch(
         server: ServerAssignment,
         matchId: String,
         modeId: String,
         teams: List<List<String>>,
+        enqueuedAt: Map<String, Instant> = emptyMap(),
+        formedAt: Instant? = null,
+        traceparent: String? = null,
     ): Boolean {
         if (teams.isEmpty() || teams.all { it.isEmpty() }) {
             // Nothing to start. Better caught here than by the server, which would
@@ -64,10 +73,24 @@ constructor(
                 .addAllTeams(teams.map { MatchTeam.newBuilder().addAllPlayerIds(it).build() })
                 .build()
 
-        return pushOverNats(server, request)
+        val headers = Headers()
+        traceparent?.let { headers.add(TRACEPARENT_HEADER, it) }
+        if (enqueuedAt.isNotEmpty()) {
+            headers.add(
+                ENQUEUED_AT_HEADER,
+                enqueuedAt.entries.joinToString(",") { "${it.key}=${it.value.toEpochMilli()}" },
+            )
+        }
+        formedAt?.let { headers.add(FORMED_AT_HEADER, it.toEpochMilli().toString()) }
+
+        return pushOverNats(server, request, headers)
     }
 
-    private fun pushOverNats(server: ServerAssignment, request: StartMatchRequest): Boolean {
+    private fun pushOverNats(
+        server: ServerAssignment,
+        request: StartMatchRequest,
+        headers: Headers,
+    ): Boolean {
         val connection = nats.connection()
         if (connection == null) {
             log.warn(
@@ -83,7 +106,12 @@ constructor(
             // distinction we do not need: either way nobody took this match, and the players go
             // back on the queue.
             val reply =
-                connection.request(subject, request.toByteArray(), Duration.ofMillis(deadlineMs))
+                connection.request(
+                    subject,
+                    headers,
+                    request.toByteArray(),
+                    Duration.ofMillis(deadlineMs),
+                )
             if (reply == null) {
                 log.warn(
                     "Nobody answered on $subject for ${server.gameServerName} " +
@@ -119,5 +147,9 @@ constructor(
 
     companion object {
         private val log: Logger = Logger.getLogger(MatchHostClient::class.java)
+
+        const val TRACEPARENT_HEADER = "traceparent"
+        const val ENQUEUED_AT_HEADER = "grounds-enqueued-at"
+        const val FORMED_AT_HEADER = "grounds-formed-at"
     }
 }

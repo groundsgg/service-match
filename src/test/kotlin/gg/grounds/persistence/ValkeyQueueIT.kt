@@ -1,5 +1,6 @@
 package gg.grounds.persistence
 
+import gg.grounds.domain.MatchTimeline
 import gg.grounds.domain.ServerAssignment
 import gg.grounds.domain.Ticket
 import gg.grounds.domain.TicketState
@@ -326,6 +327,84 @@ class ValkeyQueueIT {
         // get the teams exactly as they were drafted — a server that re-shuffled
         // them would play a different match than the one that gets rated.
         assertEquals(listOf(listOf("p1", "p2"), listOf("p3", "p4")), queue.matchTeams(matchId))
+    }
+
+    @Test
+    fun `the claim stores every player's enqueue time and the trace`() {
+        val a = ticket("p1", waitedSeconds = 30)
+        val b = ticket("p2", waitedSeconds = 5)
+        queue.enqueue(a, TTL)
+        queue.enqueue(b, TTL)
+        val traceparent = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+        val formed = Instant.ofEpochMilli(Instant.now().toEpochMilli())
+
+        val matchId = UUID.randomUUID().toString()
+        queue.claim(matchId, "duel", listOf(a.id, b.id), 1, formed, TTL, traceparent)
+
+        val key = ValkeyQueue.matchKey(matchId)
+        assertEquals(
+            "p1=${a.enqueuedAt.toEpochMilli()},p2=${b.enqueuedAt.toEpochMilli()}",
+            redis.execute("HGET", key, "enqueuedAt").toString(),
+        )
+        assertEquals(traceparent, redis.execute("HGET", key, "traceparent").toString())
+
+        val timeline = queue.matchTimeline(matchId)
+        assertEquals(formed, timeline.formedAt)
+        assertEquals(
+            mapOf(
+                "p1" to Instant.ofEpochMilli(a.enqueuedAt.toEpochMilli()),
+                "p2" to Instant.ofEpochMilli(b.enqueuedAt.toEpochMilli()),
+            ),
+            timeline.enqueuedAt,
+        )
+        assertEquals(listOf("p1", "p2"), timeline.enqueuedAt.keys.toList(), "roster order")
+        assertEquals(traceparent, timeline.traceparent)
+    }
+
+    @Test
+    fun `a claim without a trace stores no traceparent`() {
+        val a = ticket("p1")
+        val b = ticket("p2")
+        queue.enqueue(a, TTL)
+        queue.enqueue(b, TTL)
+
+        val matchId = UUID.randomUUID().toString()
+        queue.claim(matchId, "duel", listOf(a.id, b.id), 1, Instant.now(), TTL)
+
+        assertNull(redis.execute("HGET", ValkeyQueue.matchKey(matchId), "traceparent"))
+        assertNull(queue.matchTimeline(matchId).traceparent)
+        assertEquals(2, queue.matchTimeline(matchId).enqueuedAt.size)
+    }
+
+    @Test
+    fun `a match hash from before the timeline still reads`() {
+        // Written by the previous claim script: no enqueuedAt, no traceparent.
+        val matchId = UUID.randomUUID().toString()
+        redis.execute(
+            "HSET",
+            ValkeyQueue.matchKey(matchId),
+            "matchId",
+            matchId,
+            "modeId",
+            "duel",
+            "tickets",
+            "t1,t2",
+            "teams",
+            "t1;t2",
+            "state",
+            "FORMED",
+            "attempts",
+            "0",
+            "createdAt",
+            "1760000000000",
+        )
+
+        val timeline = queue.matchTimeline(matchId)
+        assertEquals(Instant.ofEpochMilli(1_760_000_000_000), timeline.formedAt)
+        assertTrue(timeline.enqueuedAt.isEmpty())
+        assertNull(timeline.traceparent)
+
+        assertEquals(MatchTimeline(), queue.matchTimeline("does-not-exist"))
     }
 
     @Test

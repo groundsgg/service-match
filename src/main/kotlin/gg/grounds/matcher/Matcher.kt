@@ -7,6 +7,7 @@ import gg.grounds.domain.ModeConfig
 import gg.grounds.domain.Ticket
 import gg.grounds.metrics.MatchMetrics
 import gg.grounds.persistence.ValkeyQueue
+import gg.grounds.tracing.MatchTracing
 import io.quarkus.scheduler.Scheduled
 import jakarta.enterprise.context.ApplicationScoped
 import jakarta.inject.Inject
@@ -35,6 +36,7 @@ constructor(
     private val modes: ModeRegistry,
     private val matches: MatchRecordRepository,
     private val metrics: MatchMetrics,
+    private val tracing: MatchTracing,
     @param:ConfigProperty(name = "grounds.match.ticket.ttl-seconds") private val ticketTtl: Long,
     @param:ConfigProperty(name = "grounds.match.match.ttl-seconds") private val matchTtl: Long,
 ) {
@@ -93,7 +95,19 @@ constructor(
         val proposals = matchFunction.propose(mode, tickets, now)
         var committed = 0
 
+        val byId = tickets.associateBy { it.id }
         for (proposal in proposals) {
+            // The trace is started before the claim so its traceparent can be stored by the
+            // same atomic step that creates the match. A claim that loses leaves the span
+            // unended, and an unended span is never exported.
+            val span =
+                tracing.matchmaking(
+                    modeId = mode.modeId,
+                    matchId = proposal.matchId,
+                    players = proposal.ticketIds.size,
+                    oldestEnqueuedAt =
+                        proposal.ticketIds.mapNotNull { byId[it]?.enqueuedAt }.minOrNull() ?: now,
+                )
             val won =
                 queue.claim(
                     matchId = proposal.matchId,
@@ -102,8 +116,10 @@ constructor(
                     teamSize = mode.teamSize,
                     now = now,
                     matchTtlSeconds = matchTtl,
+                    traceparent = tracing.traceparent(span),
                 )
             if (won) {
+                span.end(now)
                 committed++
                 metrics.matchFormed(mode.modeId, proposal.ticketIds.size)
                 recordWaits(proposal, mode, tickets, now)
@@ -177,7 +193,9 @@ constructor(
         val byId = tickets.associateBy { it.id }
         for (id in proposal.ticketIds) {
             val enqueuedAt = byId[id]?.enqueuedAt ?: continue
-            metrics.queueWait(mode.modeId, Duration.between(enqueuedAt, now))
+            val waited = Duration.between(enqueuedAt, now)
+            metrics.queueWait(mode.modeId, waited)
+            metrics.timeToMatch(mode.modeId, waited)
         }
     }
 

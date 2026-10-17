@@ -1,12 +1,17 @@
 package gg.grounds.allocator
 
+import gg.grounds.domain.MatchTimeline
+import gg.grounds.domain.ServerAssignment
 import gg.grounds.matcher.ModeRegistry
 import gg.grounds.metrics.MatchMetrics
 import gg.grounds.persistence.ValkeyQueue
+import gg.grounds.tracing.MatchTracing
 import io.quarkus.redis.datasource.RedisDataSource
 import io.quarkus.scheduler.Scheduled
 import jakarta.enterprise.context.ApplicationScoped
 import jakarta.inject.Inject
+import java.time.Duration
+import java.time.Instant
 import org.eclipse.microprofile.config.inject.ConfigProperty
 import org.jboss.logging.Logger
 
@@ -33,6 +38,7 @@ constructor(
     private val matchHost: MatchHostClient,
     private val modes: ModeRegistry,
     private val metrics: MatchMetrics,
+    private val tracing: MatchTracing,
     @param:ConfigProperty(name = "grounds.match.alloc.lease-ms") private val leaseMs: Long,
     @param:ConfigProperty(name = "grounds.match.alloc.max-attempts") private val maxAttempts: Int,
     @param:ConfigProperty(name = "grounds.match.alloc.idle-reclaim-ms")
@@ -169,15 +175,29 @@ constructor(
             return "lease_held" // no ack: whoever holds it will finish, or it expires and we retry
         }
 
+        // When the players queued and when the match formed, as the claim stored them: the
+        // start of the allocate phase, and what the game server is told for its own timeline.
+        val timeline = queue.matchTimeline(matchId)
+
         val attempts =
             redis.execute("HINCRBY", ValkeyQueue.matchKey(matchId), "attempts", "1").toInteger()
         if (attempts > maxAttempts) {
+            recordAllocate(modeId, timeline, "failed")
             giveUp(matchId, modeId, entryId, "exceeded $maxAttempts allocation attempts")
             return "gave_up"
         }
 
         val fleet = mode.fleet
-        val server = agones.allocate(matchId, modeId, fleet, mode.playersPerMatch)
+        val allocateSpan =
+            tracing.child("allocate", timeline.traceparent, timeline.formedAt ?: Instant.now())
+        val server =
+            try {
+                agones.allocate(matchId, modeId, fleet, mode.playersPerMatch)
+            } finally {
+                allocateSpan.end()
+            }
+        val allocatedAt = Instant.now()
+        recordAllocate(modeId, timeline, if (server == null) "failed" else "ok")
 
         if (server == null) {
             // No Ready server in the fleet. Put the players back rather than let
@@ -202,7 +222,30 @@ constructor(
         // unreachable pod — lands the players back on the queue with the wait they
         // had already earned.
         val teams = queue.matchTeams(matchId)
-        if (!matchHost.startMatch(server, matchId, modeId, teams)) {
+        val pushSpan = tracing.child("push", timeline.traceparent, Instant.now())
+        val pushStarted = System.nanoTime()
+        val pushed =
+            try {
+                matchHost.startMatch(
+                    server,
+                    matchId,
+                    modeId,
+                    teams,
+                    enqueuedAt = timeline.enqueuedAt,
+                    formedAt = timeline.formedAt,
+                    traceparent = tracing.traceparent(pushSpan),
+                )
+            } finally {
+                pushSpan.end()
+            }
+        val pushTook = Duration.ofNanos(System.nanoTime() - pushStarted)
+        metrics.timeToPush(modeId, if (pushed) "ok" else "failed", pushTook)
+        log.info(
+            "Match timeline (match=$matchId, mode=$modeId, stage=push, " +
+                "result=${if (pushed) "ok" else "failed"}, gs=${server.gameServerName}, " +
+                "pushMs=${pushTook.toMillis()})"
+        )
+        if (!pushed) {
             log.warn(
                 "Server would not take the match, requeueing players " +
                     "(id=$matchId, gs=${server.gameServerName})"
@@ -229,9 +272,45 @@ constructor(
             log.info(
                 "Assigned match (id=$matchId, gs=${server.gameServerName}, addr=${server.address}:${server.port})"
             )
+            log.info(timelineLine(matchId, modeId, server, timeline, allocatedAt, pushTook))
         }
         ack(entryId)
         return if (won) "assigned" else "lost_race"
+    }
+
+    /**
+     * Where this match's seconds went before its players were routed, one line per match, greppable
+     * by `match=<id>`. A phase that cannot be told — a match formed before the timeline was stored
+     * has no enqueue times — is left out rather than guessed.
+     */
+    private fun timelineLine(
+        matchId: String,
+        modeId: String,
+        server: ServerAssignment,
+        timeline: MatchTimeline,
+        allocatedAt: Instant,
+        pushTook: Duration,
+    ): String {
+        val formedAt = timeline.formedAt
+        val oldest = timeline.enqueuedAt.values.minOrNull()
+        val phases = buildList {
+            if (formedAt != null && oldest != null) {
+                add("matchMs=${Duration.between(oldest, formedAt).toMillis()}")
+            }
+            if (formedAt != null) {
+                add("allocateMs=${Duration.between(formedAt, allocatedAt).toMillis()}")
+            }
+            add("pushMs=${pushTook.toMillis()}")
+            if (oldest != null) add("totalMs=${Duration.between(oldest, Instant.now()).toMillis()}")
+        }
+        return "Match timeline (match=$matchId, mode=$modeId, stage=assigned, " +
+            "gs=${server.gameServerName}, ${phases.joinToString(", ")})"
+    }
+
+    /** Formed to allocated (or not): the claim's createdAt is when the match formed. */
+    private fun recordAllocate(modeId: String, timeline: MatchTimeline, result: String) {
+        val formedAt = timeline.formedAt ?: return
+        metrics.timeToAllocate(modeId, result, Duration.between(formedAt, Instant.now()))
     }
 
     private fun giveUp(matchId: String, modeId: String, entryId: String, reason: String) {

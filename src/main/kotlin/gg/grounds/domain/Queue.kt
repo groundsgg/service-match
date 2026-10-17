@@ -40,6 +40,19 @@ enum class TicketState {
 
 data class ServerAssignment(val gameServerName: String, val address: String, val port: Int)
 
+/**
+ * When a match's players queued and when it formed, with its trace — what the claim stored so the
+ * allocation worker can time its phases and hand them to the game server without reading a ticket.
+ *
+ * Matches formed before these were stored have only [formedAt]; the rest is empty, not an error.
+ */
+data class MatchTimeline(
+    val formedAt: Instant? = null,
+    /** Player id to that player's ticket enqueuedAt, in roster order. */
+    val enqueuedAt: Map<String, Instant> = emptyMap(),
+    val traceparent: String? = null,
+)
+
 /** What the matcher proposes; only the claim script decides whether it happens. */
 data class MatchProposal(val matchId: String, val teams: List<List<String>>, val quality: Double) {
     val ticketIds: List<String>

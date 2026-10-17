@@ -6,8 +6,10 @@ import gg.grounds.grpc.match.StartMatchReply
 import gg.grounds.grpc.match.StartMatchRequest
 import io.nats.client.Connection
 import io.nats.client.Message
+import io.nats.client.impl.Headers
 import io.nats.client.impl.NatsMessage
 import java.time.Duration
+import java.time.Instant
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -34,7 +36,9 @@ class MatchHostClientTest {
     @Test
     fun `a server that accepts takes the match`() {
         givenConnected()
-        whenever(connection.request(any<String>(), any<ByteArray>(), any<Duration>()))
+        whenever(
+                connection.request(any<String>(), any<Headers>(), any<ByteArray>(), any<Duration>())
+            )
             .thenReturn(reply(accepted = true))
 
         assertTrue(client().startMatch(SERVER, MATCH, MODE, TEAMS))
@@ -43,14 +47,17 @@ class MatchHostClientTest {
     @Test
     fun `the server is addressed by name, not by pod IP`() {
         givenConnected()
-        whenever(connection.request(any<String>(), any<ByteArray>(), any<Duration>()))
+        whenever(
+                connection.request(any<String>(), any<Headers>(), any<ByteArray>(), any<Duration>())
+            )
             .thenReturn(reply(accepted = true))
 
         client().startMatch(SERVER, MATCH, MODE, TEAMS)
 
         val subject = argumentCaptor<String>()
         val payload = argumentCaptor<ByteArray>()
-        verify(connection).request(subject.capture(), payload.capture(), any<Duration>())
+        verify(connection)
+            .request(subject.capture(), any<Headers>(), payload.capture(), any<Duration>())
         assertEquals("match.host.bedwars-abc12.start", subject.firstValue)
 
         val sent = StartMatchRequest.parseFrom(payload.firstValue)
@@ -61,9 +68,82 @@ class MatchHostClientTest {
     }
 
     @Test
+    fun `the push carries the match timeline as headers`() {
+        givenConnected()
+        whenever(
+                connection.request(any<String>(), any<Headers>(), any<ByteArray>(), any<Duration>())
+            )
+            .thenReturn(reply(accepted = true))
+
+        client()
+            .startMatch(
+                SERVER,
+                MATCH,
+                MODE,
+                TEAMS,
+                enqueuedAt =
+                    linkedMapOf(
+                        P1 to Instant.ofEpochMilli(1_760_000_000_000),
+                        P2 to Instant.ofEpochMilli(1_760_000_004_500),
+                    ),
+                formedAt = Instant.ofEpochMilli(1_760_000_010_000),
+                traceparent = TRACEPARENT,
+            )
+
+        val headers = sentHeaders()
+        assertEquals(listOf(TRACEPARENT), headers.get("traceparent"))
+        assertEquals(
+            listOf("$P1=1760000000000,$P2=1760000004500"),
+            headers.get("grounds-enqueued-at"),
+        )
+        assertEquals(listOf("1760000010000"), headers.get("grounds-formed-at"))
+    }
+
+    @Test
+    fun `without a trace the push still carries the enqueue and formed times`() {
+        // OTel off, or a match formed before traces were stored: no traceparent, but the
+        // game server's timeline still gets every player's queue time.
+        givenConnected()
+        whenever(
+                connection.request(any<String>(), any<Headers>(), any<ByteArray>(), any<Duration>())
+            )
+            .thenReturn(reply(accepted = true))
+
+        client()
+            .startMatch(
+                SERVER,
+                MATCH,
+                MODE,
+                TEAMS,
+                enqueuedAt = mapOf(P1 to Instant.ofEpochMilli(1_000)),
+                formedAt = Instant.ofEpochMilli(2_000),
+            )
+
+        val headers = sentHeaders()
+        assertFalse(headers.containsKey("traceparent"))
+        assertEquals(listOf("$P1=1000"), headers.get("grounds-enqueued-at"))
+        assertEquals(listOf("2000"), headers.get("grounds-formed-at"))
+    }
+
+    @Test
+    fun `a match with no timeline stored sends no timeline headers`() {
+        givenConnected()
+        whenever(
+                connection.request(any<String>(), any<Headers>(), any<ByteArray>(), any<Duration>())
+            )
+            .thenReturn(reply(accepted = true))
+
+        assertTrue(client().startMatch(SERVER, MATCH, MODE, TEAMS))
+
+        assertTrue(sentHeaders().isEmpty)
+    }
+
+    @Test
     fun `a refusal is final`() {
         givenConnected()
-        whenever(connection.request(any<String>(), any<ByteArray>(), any<Duration>()))
+        whenever(
+                connection.request(any<String>(), any<Headers>(), any<ByteArray>(), any<Duration>())
+            )
             .thenReturn(reply(accepted = false, reason = "shutting down"))
 
         assertFalse(client().startMatch(SERVER, MATCH, MODE, TEAMS))
@@ -74,11 +154,13 @@ class MatchHostClientTest {
         // jnats answers null for both a 503 no-responder and a deadline that ran
         // out. Either way nobody took this match.
         givenConnected()
-        whenever(connection.request(any<String>(), any<ByteArray>(), any<Duration>()))
+        whenever(
+                connection.request(any<String>(), any<Headers>(), any<ByteArray>(), any<Duration>())
+            )
             .thenReturn(null)
 
         assertFalse(client().startMatch(SERVER, MATCH, MODE, TEAMS))
-        verify(connection).request(any<String>(), any<ByteArray>(), any<Duration>())
+        verify(connection).request(any<String>(), any<Headers>(), any<ByteArray>(), any<Duration>())
     }
 
     @Test
@@ -104,10 +186,19 @@ class MatchHostClientTest {
         // A truncated varint: there is no field number to be read here, so this
         // cannot be mistaken for a valid message with unknown fields.
         val garbage = message(byteArrayOf(0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte()))
-        whenever(connection.request(any<String>(), any<ByteArray>(), any<Duration>()))
+        whenever(
+                connection.request(any<String>(), any<Headers>(), any<ByteArray>(), any<Duration>())
+            )
             .thenReturn(garbage)
 
         assertFalse(client().startMatch(SERVER, MATCH, MODE, TEAMS))
+    }
+
+    private fun sentHeaders(): Headers {
+        val headers = argumentCaptor<Headers>()
+        verify(connection)
+            .request(any<String>(), headers.capture(), any<ByteArray>(), any<Duration>())
+        return headers.firstValue
     }
 
     private fun givenConnected() {
@@ -139,5 +230,8 @@ class MatchHostClientTest {
         private const val MATCH = "6f1d2b3c-0000-4000-8000-000000000001"
         private const val MODE = "bedwars-squads"
         private val TEAMS = listOf(listOf("p1", "p2"), listOf("p3", "p4"))
+        private const val P1 = "0b8e0d7e-1111-4000-8000-000000000001"
+        private const val P2 = "0b8e0d7e-2222-4000-8000-000000000002"
+        private const val TRACEPARENT = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
     }
 }
