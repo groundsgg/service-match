@@ -13,6 +13,7 @@ COPY src/ src/
 RUN --mount=type=cache,target=/root/.gradle/caches,sharing=locked \
     --mount=type=cache,target=/root/.gradle/wrapper,sharing=locked \
     --mount=type=secret,id=github_token,required=true \
+    --mount=type=secret,id=gradle_init,target=/root/.gradle/init.d/grounds-maven-mirror.init.gradle.kts,required=false \
     /bin/sh -euc '\
       : "${GITHUB_USER:?GITHUB_USER build arg is required}"; \
       token="$(cat /run/secrets/github_token)"; \
