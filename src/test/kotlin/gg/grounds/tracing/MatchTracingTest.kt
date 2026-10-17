@@ -64,9 +64,12 @@ class MatchTracingTest {
 
         assertNotNull(traceparent)
         assertTrue(
-            Regex("00-[0-9a-f]{32}-[0-9a-f]{16}-01").matches(traceparent!!),
+            Regex("00-[0-9a-f]{32}-[0-9a-f]{16}-[0-9a-f]{2}").matches(traceparent!!),
             "W3C traceparent, got $traceparent",
         )
+        // Bit 0 is sampled. Newer OpenTelemetry SDKs also set bit 1 (random), so the
+        // flags are 03 rather than 01. Downstream parsers must keep the sampled bit.
+        assertEquals(0x01, traceparent.substringAfterLast("-").toInt(16) and 0x01)
 
         // Another replica, with nothing but the string from the match hash.
         val formed = Instant.now().minusSeconds(1)

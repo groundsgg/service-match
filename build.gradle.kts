@@ -103,8 +103,10 @@ dependencies {
     testImplementation("io.quarkus:quarkus-junit5")
     testImplementation("io.quarkus:quarkus-junit5-mockito")
     testImplementation("org.mockito.kotlin:mockito-kotlin:6.4.0")
-    testImplementation("org.testcontainers:postgresql:1.21.5")
-    testImplementation("org.testcontainers:junit-jupiter:1.21.5")
+    // Quarkus 3.40 moves to Testcontainers 2, which renamed these modules.
+    // Versions come from the BOM; 1.21.5 of the old coordinates was never published.
+    testImplementation("org.testcontainers:testcontainers-postgresql")
+    testImplementation("org.testcontainers:testcontainers-junit-jupiter")
     testImplementation("io.rest-assured:rest-assured")
 }
 
