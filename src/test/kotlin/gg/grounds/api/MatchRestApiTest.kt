@@ -730,6 +730,82 @@ class MatchRestApiTest {
 
     // -----------------------------------------------------------
 
+    // -----------------------------------------------------------
+    // /v1/match/players/{id}/match
+    // -----------------------------------------------------------
+
+    @Test
+    fun `a player's running match reads back with its server`() {
+        whenever(queue.activeMatch(PLAYER))
+            .thenReturn(
+                ticket()
+                    .copy(
+                        state = TicketState.ASSIGNED,
+                        matchId = "match-1",
+                        assignment = ServerAssignment("bedwars-abc12", "10.0.0.1", 7000),
+                    )
+            )
+
+        given()
+            .get("/v1/match/players/$PLAYER/match")
+            .then()
+            .statusCode(200)
+            .body("matchId", equalTo("match-1"))
+            .body("modeId", equalTo(MODE))
+            .body("gameServerName", equalTo("bedwars-abc12"))
+    }
+
+    @Test
+    fun `a player in no match is 404`() {
+        whenever(queue.activeMatch(PLAYER)).thenReturn(null)
+
+        given().get("/v1/match/players/$PLAYER/match").then().statusCode(404)
+    }
+
+    @Test
+    fun `leaving a match is 204`() {
+        given().delete("/v1/match/players/$PLAYER/match").then().statusCode(204)
+
+        verify(queue).leaveMatch(PLAYER)
+    }
+
+    @Test
+    fun `a drop off the network is passed on as presence`() {
+        whenever(queue.matchPresence(PLAYER, false)).thenReturn(true)
+
+        given()
+            .contentType(ContentType.JSON)
+            .body("""{"connected":false}""")
+            .put("/v1/match/players/$PLAYER/match/presence")
+            .then()
+            .statusCode(204)
+
+        verify(queue).matchPresence(PLAYER, false)
+    }
+
+    @Test
+    fun `presence for a player in no match is 404`() {
+        whenever(queue.matchPresence(PLAYER, true)).thenReturn(false)
+
+        given()
+            .contentType(ContentType.JSON)
+            .body("""{"connected":true}""")
+            .put("/v1/match/players/$PLAYER/match/presence")
+            .then()
+            .statusCode(404)
+    }
+
+    @Test
+    fun `presence without connected is 400`() {
+        given()
+            .contentType(ContentType.JSON)
+            .body("{}")
+            .put("/v1/match/players/$PLAYER/match/presence")
+            .then()
+            .statusCode(400)
+            .body("code", equalTo("invalid_request"))
+    }
+
     private fun ticket() =
         Ticket(
             id = TICKET,

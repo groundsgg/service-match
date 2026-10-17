@@ -62,6 +62,15 @@ if ticketsCsv then
       if redis.call('GET', guardKey) == id then
         redis.call('DEL', guardKey)
       end
+
+      -- Where the player is playing, for a proxy that never saw this assignment:
+      -- a player who drops and logs back in through another proxy is offered
+      -- their match from this. It lives no longer than the match hash; a match
+      -- hash without an expiry gets no entry rather than an immortal one.
+      local matchTtl = redis.call('TTL', matchKey)
+      if matchTtl > 0 then
+        redis.call('SET', 'mm:active:' .. playerId, id, 'EX', matchTtl)
+      end
     end
   end
 end

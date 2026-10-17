@@ -5,6 +5,7 @@ import gg.grounds.domain.PlayerPlacement
 import gg.grounds.domain.RatingCalculator
 import gg.grounds.domain.RatingRepository
 import gg.grounds.leaderboard.LeaderboardClient
+import gg.grounds.persistence.ValkeyQueue
 import gg.grounds.persistence.ValkeyQueueIT
 import io.quarkus.test.common.QuarkusTestResource
 import io.quarkus.test.junit.QuarkusTest
@@ -39,6 +40,8 @@ class ResultServiceLeaderboardTest {
 
     @Inject lateinit var calculator: RatingCalculator
 
+    @Inject lateinit var queue: ValkeyQueue
+
     private fun formMatch(ranked: Boolean, vararg players: UUID): UUID {
         val matchId = UUID.randomUUID()
         matches.recordMatch(matchId, "duel", ranked, players.toList())
@@ -46,7 +49,7 @@ class ResultServiceLeaderboardTest {
     }
 
     private fun resultService(leaderboard: LeaderboardClient) =
-        ResultService(matches, ratings, calculator, leaderboard, 25.0, 8.333333333333334)
+        ResultService(matches, ratings, calculator, leaderboard, queue, 25.0, 8.333333333333334)
 
     @Test
     fun `a rated result submits one score per player with the right board, score and idempotency key`() {

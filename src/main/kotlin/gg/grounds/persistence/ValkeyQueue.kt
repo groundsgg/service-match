@@ -188,6 +188,45 @@ class ValkeyQueue @Inject constructor(private val redis: RedisDataSource) {
     }
 
     /**
+     * The assigned ticket of the match [playerId] is playing, or null. Written by the assign
+     * script, so any proxy can offer a rejoin — not just the one that saw the assignment.
+     */
+    fun activeTicket(playerId: String): Ticket? {
+        val ticketId = redis.execute("GET", activeKey(playerId))?.toString() ?: return null
+        return findTicket(ticketId)?.takeIf {
+            it.state == TicketState.ASSIGNED && it.assignment != null
+        }
+    }
+
+    /** Forget the match [playerId] is playing — they left it for good. */
+    fun clearActive(playerId: String) {
+        redis.execute("DEL", activeKey(playerId))
+    }
+
+    /**
+     * Expire [playerId]'s active match after [seconds]: the time a disconnected player has to come
+     * back. @return false if there is no entry.
+     */
+    fun expireActive(playerId: String, seconds: Long): Boolean =
+        redis.execute("EXPIRE", activeKey(playerId), seconds.toString()).toLong() == 1L
+
+    /**
+     * Give [playerId]'s active match back the lifetime of the match itself, once they are back in
+     * it. @return false if there is no entry, or its match is already gone.
+     */
+    fun keepActive(playerId: String): Boolean {
+        val matchId = activeTicket(playerId)?.matchId ?: return false
+        val ttl = redis.execute("TTL", matchKey(matchId)).toLong()
+        if (ttl <= 0) return false
+        return expireActive(playerId, ttl)
+    }
+
+    /** A match ended: drop the entries of [playerIds] that still point at it. */
+    fun endActive(matchId: String, playerIds: List<String>): Long =
+        if (playerIds.isEmpty()) 0
+        else eval("end_active", keys = playerIds.map(::activeKey), args = listOf(matchId))
+
+    /**
      * The match's roster, in the order it was drafted: teams of player ids.
      *
      * The claim script stores teams as ticket ids (`a,b;c,d`) because tickets are what it has. The
@@ -397,6 +436,7 @@ class ValkeyQueue @Inject constructor(private val redis: RedisDataSource) {
                 "fail_cancel",
                 "upsert_mode",
                 "expire_mode",
+                "end_active",
             )
 
         const val ALLOC_STREAM = "mm:alloc"
@@ -408,6 +448,9 @@ class ValkeyQueue @Inject constructor(private val redis: RedisDataSource) {
         const val MODES_KEY = "mm:modes"
 
         fun guardKey(playerId: String) = "mm:player:$playerId"
+
+        /** The ticket of the match a player is playing; see assign.lua. */
+        fun activeKey(playerId: String) = "mm:active:$playerId"
 
         fun ticketKey(ticketId: String) = "mm:ticket:$ticketId"
 

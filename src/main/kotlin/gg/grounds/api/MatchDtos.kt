@@ -92,6 +92,38 @@ data class AssignmentResponse(
 )
 
 // ---------------------------------------------------------------
+// A player's running match
+// ---------------------------------------------------------------
+
+@Schema(description = "The match a player is playing, for a proxy offering them a rejoin.")
+data class ActiveMatchResponse(
+    val matchId: String,
+    @get:Schema(description = "Mode within the project.", examples = ["duel"]) val modeId: String,
+    @get:Schema(description = "The GameServer, as the proxy has it registered.")
+    val gameServerName: String,
+) {
+    companion object {
+        fun from(ticket: Ticket) =
+            ActiveMatchResponse(
+                matchId = ticket.matchId.orEmpty(),
+                modeId = ticket.modeId,
+                gameServerName = ticket.assignment?.gameServerName.orEmpty(),
+            )
+    }
+}
+
+@Schema(description = "Whether the player is in their match right now.")
+data class MatchPresenceRequestBody(
+    @get:Schema(
+        description =
+            "False when the player dropped off the network: the match is kept for the rejoin " +
+                "grace only. True once they are back in it.",
+        required = true,
+    )
+    val connected: Boolean?
+)
+
+// ---------------------------------------------------------------
 // Ratings and queue stats
 // ---------------------------------------------------------------
 

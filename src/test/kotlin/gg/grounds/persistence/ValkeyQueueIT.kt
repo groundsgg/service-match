@@ -412,6 +412,84 @@ class ValkeyQueueIT {
         assertEquals(emptyList<List<String>>(), queue.matchTeams("does-not-exist"))
     }
 
+    /** p1 against p2, claimed and assigned to [server]; returns the match id and p1's ticket. */
+    private fun assignedDuel(server: String = "gs", p1: String = "p1"): Pair<String, Ticket> {
+        val a = ticket(p1)
+        val b = ticket("p2-${UUID.randomUUID()}")
+        queue.enqueue(a, TTL)
+        queue.enqueue(b, TTL)
+        val matchId = UUID.randomUUID().toString()
+        queue.claim(matchId, "duel", listOf(a.id, b.id), 1, Instant.now(), TTL)
+        queue.assign(matchId, ServerAssignment(server, "10.0.0.1", 25565))
+        return matchId to a
+    }
+
+    private fun activeTtl(player: String): Long =
+        redis.execute("TTL", ValkeyQueue.activeKey(player)).toLong()
+
+    @Test
+    fun `assignment records the match each player is playing`() {
+        val (matchId, ticket) = assignedDuel(server = "duel-abc12")
+
+        val active = queue.activeTicket("p1")
+        assertEquals(ticket.id, active?.id)
+        assertEquals(matchId, active?.matchId)
+        assertEquals("duel-abc12", active?.assignment?.gameServerName)
+        assertTrue(activeTtl("p1") in 1..TTL, "lives no longer than the match")
+    }
+
+    @Test
+    fun `a matched but unassigned ticket is not a running match`() {
+        val a = ticket("p1")
+        val b = ticket("p2")
+        queue.enqueue(a, TTL)
+        queue.enqueue(b, TTL)
+        val matchId = UUID.randomUUID().toString()
+        queue.claim(matchId, "duel", listOf(a.id, b.id), 1, Instant.now(), TTL)
+
+        assertNull(queue.activeTicket("p1"))
+    }
+
+    @Test
+    fun `the end of a match clears its players but not their next match`() {
+        val (first, _) = assignedDuel()
+        val (second, next) = assignedDuel(server = "gs-next")
+
+        assertEquals(0L, queue.endActive(first, listOf("p1")), "p1 is already in the next match")
+        assertEquals(next.id, queue.activeTicket("p1")?.id)
+
+        assertEquals(1L, queue.endActive(second, listOf("p1")))
+        assertNull(queue.activeTicket("p1"))
+    }
+
+    @Test
+    fun `a drop leaves the grace, and coming back restores the match's lifetime`() {
+        assignedDuel()
+
+        assertTrue(queue.expireActive("p1", 60))
+        assertTrue(activeTtl("p1") in 1..60)
+
+        assertTrue(queue.keepActive("p1"))
+        assertTrue(activeTtl("p1") > 60, "back in the match, a later drop gets the full grace")
+    }
+
+    @Test
+    fun `presence and leaving are no-ops for a player in no match`() {
+        assertFalse(queue.expireActive("nobody", 60))
+        assertFalse(queue.keepActive("nobody"))
+        queue.clearActive("nobody")
+        assertNull(queue.activeTicket("nobody"))
+    }
+
+    @Test
+    fun `leaving clears the running match`() {
+        assignedDuel()
+
+        queue.clearActive("p1")
+
+        assertNull(queue.activeTicket("p1"))
+    }
+
     private fun isLive(matchId: String): Boolean =
         redis.execute("SISMEMBER", ValkeyQueue.LIVE_MATCHES, matchId).toLong() == 1L
 
