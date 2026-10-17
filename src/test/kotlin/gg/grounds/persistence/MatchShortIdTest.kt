@@ -32,7 +32,7 @@ class MatchShortIdTest {
     }
 
     @Test
-    fun `a second match with the same short id is refused`() {
+    fun `a second new match with the same short id is refused`() {
         val first = UUID.randomUUID()
         matches.recordMatch(first, "duel", false, emptyList())
         val sameShortId =
