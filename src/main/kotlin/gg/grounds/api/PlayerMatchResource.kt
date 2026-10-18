@@ -73,6 +73,10 @@ class PlayerMatchResource @Inject constructor(private val queue: QueueService) {
         APIResponse(responseCode = "204", description = "No match is offered to the player."),
         APIResponse(responseCode = "400", description = "playerId is not a UUID."),
         APIResponse(responseCode = "401", description = "Authentication is missing or invalid."),
+        APIResponse(
+            responseCode = "503",
+            description = "Valkey is out of connections; retry after the Retry-After seconds.",
+        ),
     )
     fun leave(@PathParam("playerId") playerId: String?) {
         queue.leaveMatch(parsePlayerId(playerId))

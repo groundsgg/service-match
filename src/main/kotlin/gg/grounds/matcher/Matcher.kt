@@ -8,6 +8,7 @@ import gg.grounds.domain.MatchRecordRepository
 import gg.grounds.domain.ModeConfig
 import gg.grounds.domain.Ticket
 import gg.grounds.metrics.MatchMetrics
+import gg.grounds.persistence.Matchmaker
 import gg.grounds.persistence.ValkeyQueue
 import gg.grounds.tracing.MatchTracing
 import io.quarkus.scheduler.Scheduled
@@ -35,7 +36,7 @@ import org.jboss.logging.Logger
 class Matcher
 @Inject
 constructor(
-    private val queue: ValkeyQueue,
+    @param:Matchmaker private val queue: ValkeyQueue,
     private val modes: ModeRegistry,
     private val matches: MatchRecordRepository,
     private val metrics: MatchMetrics,

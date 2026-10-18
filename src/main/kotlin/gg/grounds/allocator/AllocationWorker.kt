@@ -5,8 +5,10 @@ import gg.grounds.domain.MatchTimeline
 import gg.grounds.domain.ServerAssignment
 import gg.grounds.matcher.ModeRegistry
 import gg.grounds.metrics.MatchMetrics
+import gg.grounds.persistence.Matchmaker
 import gg.grounds.persistence.ValkeyQueue
 import gg.grounds.tracing.MatchTracing
+import io.quarkus.redis.client.RedisClientName
 import io.quarkus.redis.datasource.RedisDataSource
 import io.quarkus.scheduler.Scheduled
 import jakarta.enterprise.context.ApplicationScoped
@@ -33,8 +35,8 @@ import org.jboss.logging.Logger
 class AllocationWorker
 @Inject
 constructor(
-    private val redis: RedisDataSource,
-    private val queue: ValkeyQueue,
+    @param:RedisClientName(Matchmaker.CLIENT) private val redis: RedisDataSource,
+    @param:Matchmaker private val queue: ValkeyQueue,
     private val agones: AgonesAllocator,
     private val matchHost: MatchHostClient,
     private val modes: ModeRegistry,

@@ -1,7 +1,9 @@
 package gg.grounds.allocator
 
 import gg.grounds.MatchRole
+import gg.grounds.persistence.Matchmaker
 import gg.grounds.persistence.ValkeyQueue
+import io.quarkus.redis.client.RedisClientName
 import io.quarkus.redis.datasource.RedisDataSource
 import io.quarkus.scheduler.Scheduled
 import jakarta.enterprise.context.ApplicationScoped
@@ -35,8 +37,8 @@ import org.jboss.logging.Logger
 class StaleMatchWatchdog
 @Inject
 constructor(
-    private val redis: RedisDataSource,
-    private val queue: ValkeyQueue,
+    @param:RedisClientName(Matchmaker.CLIENT) private val redis: RedisDataSource,
+    @param:Matchmaker private val queue: ValkeyQueue,
     @param:ConfigProperty(name = "grounds.match.watchdog.stale-after-ms")
     private val staleAfterMs: Long,
 ) {
