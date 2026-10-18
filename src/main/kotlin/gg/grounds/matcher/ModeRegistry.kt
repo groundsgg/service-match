@@ -3,6 +3,7 @@ package gg.grounds.matcher
 import gg.grounds.MatchRole
 import gg.grounds.domain.BandConfig
 import gg.grounds.domain.ModeConfig
+import gg.grounds.persistence.Matchmaker
 import gg.grounds.persistence.ValkeyQueue
 import io.quarkus.runtime.LaunchMode
 import io.quarkus.runtime.StartupEvent
@@ -25,7 +26,7 @@ import org.jboss.logging.Logger
  * formed keep the parameters they were formed with.
  */
 @ApplicationScoped
-class ModeRegistry @Inject constructor(private val persistence: ValkeyQueue) {
+class ModeRegistry @Inject constructor(@param:Matchmaker private val persistence: ValkeyQueue) {
     private val modes = ConcurrentHashMap<String, ModeConfig>()
 
     fun upsert(config: ModeConfig): Boolean = modes.put(config.modeId, config) == null

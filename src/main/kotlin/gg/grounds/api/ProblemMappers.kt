@@ -1,5 +1,6 @@
 package gg.grounds.api
 
+import io.vertx.core.http.ConnectionPoolTooBusyException
 import jakarta.ws.rs.core.Response
 import jakarta.ws.rs.ext.ExceptionMapper
 import jakarta.ws.rs.ext.Provider
@@ -67,6 +68,28 @@ class InvalidRequestException(message: String) : RuntimeException(message)
 class InvalidRequestMapper : ExceptionMapper<InvalidRequestException> {
     override fun toResponse(exception: InvalidRequestException): Response =
         problem(400, "Invalid request", exception.message, "invalid_request")
+}
+
+/**
+ * Every Valkey connection of the API is busy and the line for one is full. That is load, not a
+ * broken request or a broken service: 503 with a Retry-After tells a caller to back off, where the
+ * default 500 reads as a bug.
+ */
+@Provider
+class ValkeyBusyMapper : ExceptionMapper<ConnectionPoolTooBusyException> {
+    override fun toResponse(exception: ConnectionPoolTooBusyException): Response =
+        Response.status(503)
+            .type(PROBLEM_JSON)
+            .header("Retry-After", "1")
+            .entity(
+                ProblemDetails(
+                    title = "Busy",
+                    status = 503,
+                    detail = "Valkey connection pool exhausted, retry shortly",
+                    code = "valkey_busy",
+                )
+            )
+            .build()
 }
 
 private fun problem(status: Int, title: String, detail: String?, code: String): Response =

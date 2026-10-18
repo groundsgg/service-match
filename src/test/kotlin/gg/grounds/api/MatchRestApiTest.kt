@@ -18,6 +18,7 @@ import io.quarkus.test.common.QuarkusTestResource
 import io.quarkus.test.junit.QuarkusTest
 import io.restassured.RestAssured.given
 import io.restassured.http.ContentType
+import io.vertx.core.http.ConnectionPoolTooBusyException
 import java.time.Instant
 import java.util.UUID
 import org.hamcrest.CoreMatchers.equalTo
@@ -27,6 +28,7 @@ import org.junit.jupiter.api.Test
 import org.mockito.kotlin.any
 import org.mockito.kotlin.anyOrNull
 import org.mockito.kotlin.argumentCaptor
+import org.mockito.kotlin.doThrow
 import org.mockito.kotlin.eq
 import org.mockito.kotlin.isNull
 import org.mockito.kotlin.never
@@ -767,6 +769,20 @@ class MatchRestApiTest {
         given().delete("/v1/match/players/$PLAYER/match").then().statusCode(204)
 
         verify(queue).leaveMatch(PLAYER)
+    }
+
+    @Test
+    fun `an exhausted Valkey pool is 503 with a Retry-After, not 500`() {
+        doThrow(ConnectionPoolTooBusyException("Connection pool reached max wait queue size of 24"))
+            .whenever(queue)
+            .leaveMatch(PLAYER)
+
+        given()
+            .delete("/v1/match/players/$PLAYER/match")
+            .then()
+            .statusCode(503)
+            .header("Retry-After", "1")
+            .body("code", equalTo("valkey_busy"))
     }
 
     @Test
