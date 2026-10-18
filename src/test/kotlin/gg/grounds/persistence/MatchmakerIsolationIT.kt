@@ -12,10 +12,11 @@ import jakarta.inject.Inject
 import java.time.Duration
 import java.util.UUID
 import java.util.concurrent.Executors
+import java.util.concurrent.Future
 import java.util.concurrent.TimeUnit
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTimeoutPreemptively
-import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 /**
@@ -46,16 +47,23 @@ class MatchmakerIsolationIT {
 
     @Test
     fun `an API storm that takes every API connection leaves the matchmaker's client free`() {
-        // Create both queues (and load their scripts) while connections are still to be had.
+        // Create both queues (and load their scripts) while connections are still to be had. This
+        // also leaves the API's one connection open and idle.
         apiQueue.queueDepth("duel")
         matchmakerQueue.queueDepth("duel")
 
         val storm = Executors.newFixedThreadPool(2)
         try {
-            // One BLPOP holds the API's only connection, the other waits in its one-slot line.
-            val held = List(2) { storm.submit { apiRedis.execute("BLPOP", "pressure:none", "3") } }
-            awaitApiPoolExhausted()
+            // One BLPOP takes the API's only connection, the next waits in its one-slot line. In
+            // that order: a request that arrives while a connection is still being opened takes
+            // the waiting slot itself, and one that finds a free slot waits instead of failing.
+            val held = mutableListOf<Future<*>>()
+            repeat(2) {
+                held += storm.submit { apiRedis.execute("BLPOP", "pressure:none", "3") }
+                Thread.sleep(300)
+            }
 
+            assertThrows(ConnectionPoolTooBusyException::class.java) { apiRedis.execute("PING") }
             given().delete("/v1/match/players/${UUID.randomUUID()}/match").then().statusCode(503)
 
             assertTimeoutPreemptively(Duration.ofMillis(500)) {
@@ -67,19 +75,5 @@ class MatchmakerIsolationIT {
         } finally {
             storm.shutdownNow()
         }
-    }
-
-    /** Waits until a command on the API's client is turned away for want of a connection. */
-    private fun awaitApiPoolExhausted() {
-        val deadline = System.nanoTime() + Duration.ofSeconds(2).toNanos()
-        while (System.nanoTime() < deadline) {
-            try {
-                apiRedis.execute("PING")
-            } catch (e: ConnectionPoolTooBusyException) {
-                return
-            }
-            Thread.sleep(20)
-        }
-        assertTrue(false, "the API pool never filled up")
     }
 }
