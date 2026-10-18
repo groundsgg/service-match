@@ -363,10 +363,17 @@ data class ReportResultResponse(
     val applied: Boolean,
     @get:Schema(description = "True when the match was ranked and ratings actually moved.")
     val rated: Boolean,
+    @get:Schema(
+        description =
+            "True when the result was accepted onto the result stream and the ladder moves " +
+                "asynchronously, within seconds. `applied` and `rated` then say what will " +
+                "happen. False when it was applied before this answer."
+    )
+    val queued: Boolean = false,
 ) {
     companion object {
-        fun from(outcome: ResultOutcome) =
-            ReportResultResponse(applied = outcome.applied, rated = outcome.rated)
+        fun from(outcome: ResultOutcome, queued: Boolean = false) =
+            ReportResultResponse(applied = outcome.applied, rated = outcome.rated, queued = queued)
     }
 }
 

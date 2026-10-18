@@ -1,5 +1,6 @@
 package gg.grounds.matcher
 
+import gg.grounds.MatchRole
 import gg.grounds.domain.BandConfig
 import gg.grounds.domain.ModeConfig
 import gg.grounds.persistence.ValkeyQueue
@@ -92,8 +93,11 @@ class ModeRegistry @Inject constructor(private val persistence: ValkeyQueue) {
     fun loadPersisted(
         @Observes
         @Priority(jakarta.interceptor.Interceptor.Priority.PLATFORM_BEFORE - 1)
-        event: StartupEvent
+        event: StartupEvent,
+        role: MatchRole = MatchRole("all"),
     ) {
+        // The core writer has no Valkey and no queue to tick.
+        if (role.writer) return
         val persisted = persistence.loadModes()
         persisted.forEach { upsert(it) }
         // Only where nobody pushes modes for real. In production a phantom "duel" would show up in

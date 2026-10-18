@@ -505,6 +505,15 @@ class ValkeyQueueIT {
         private lateinit var container: PostgreSQLContainer
 
         override fun start(): Map<String, String> {
+            // An existing database instead of a container, for a machine without Docker.
+            System.getenv("TEST_POSTGRES_URL")?.let { url ->
+                return mapOf(
+                    "quarkus.datasource.jdbc.url" to url,
+                    "quarkus.datasource.username" to (System.getenv("TEST_POSTGRES_USER") ?: "app"),
+                    "quarkus.datasource.password" to
+                        (System.getenv("TEST_POSTGRES_PASSWORD") ?: "app"),
+                )
+            }
             container = PostgreSQLContainer(DockerImageName.parse("postgres:16-alpine"))
             container.start()
             return mapOf(
@@ -532,6 +541,9 @@ class ValkeyQueueIT {
         private lateinit var container: GenericContainer<*>
 
         override fun start(): Map<String, String> {
+            System.getenv("TEST_VALKEY_URL")?.let {
+                return mapOf("quarkus.redis.hosts" to it)
+            }
             container =
                 GenericContainer(DockerImageName.parse("valkey/valkey:8-alpine"))
                     .withExposedPorts(6379)

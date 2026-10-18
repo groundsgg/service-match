@@ -1,5 +1,6 @@
 package gg.grounds.api
 
+import gg.grounds.domain.MatchRecord
 import gg.grounds.domain.MatchRecordRepository
 import gg.grounds.domain.PlayerPlacement
 import gg.grounds.domain.Rating
@@ -52,7 +53,7 @@ constructor(
         placements: List<PlayerPlacement>,
         terminationReason: String,
     ): ResultOutcome {
-        val match = matches.findMatch(matchId) ?: throw UnknownMatchException(matchId.toString())
+        val match = validate(matchId, placements)
 
         // Cheap rejection before any maths: a replay is the common case on a
         // retry, and there is nothing to compute.
@@ -60,11 +61,61 @@ constructor(
             return ResultOutcome(applied = false, rated = false)
         }
 
+        return apply(match, placements, terminationReason, clearActive = true)
+    }
+
+    /**
+     * The core writer's half of an asynchronous result (see `MatchResultConsumer`).
+     *
+     * Same checks and the same idempotent transaction as [report], minus the active-match cleanup:
+     * that is regional Valkey state, which the regional runtime already cleared when it accepted
+     * the result, and which the writer in core cannot reach.
+     */
+    fun applySubmitted(
+        matchId: UUID,
+        placements: List<PlayerPlacement>,
+        terminationReason: String,
+    ): ResultOutcome {
+        val match = validate(matchId, placements)
+        if (match.ended) {
+            return ResultOutcome(applied = false, rated = false)
+        }
+        return apply(match, placements, terminationReason, clearActive = false)
+    }
+
+    /**
+     * The match as recorded at claim time, once the result is known to be about it: the match
+     * exists and every placed player was in it. Throws otherwise.
+     */
+    fun validate(matchId: UUID, placements: List<PlayerPlacement>): MatchRecord {
+        val match = matches.findMatch(matchId) ?: throw UnknownMatchException(matchId.toString())
         for (p in placements) {
             if (p.playerId !in match.playerIds) {
                 throw NotInMatchException(p.playerId, matchId)
             }
         }
+        return match
+    }
+
+    /**
+     * The match is over, so no proxy may offer it as a rejoin any more. A Valkey hiccup costs a
+     * stale offer for at most the match TTL, never the result itself, so this never throws.
+     */
+    fun clearActiveMatch(match: MatchRecord) {
+        try {
+            queue.endActive(match.matchId.toString(), match.playerIds.map(UUID::toString))
+        } catch (e: Exception) {
+            log.warn("Could not clear the players' active match (match=${match.matchId})", e)
+        }
+    }
+
+    private fun apply(
+        match: MatchRecord,
+        placements: List<PlayerPlacement>,
+        terminationReason: String,
+        clearActive: Boolean,
+    ): ResultOutcome {
+        val matchId = match.matchId
 
         // Ranked is decided when the match is formed, never by the reporter —
         // that is what stops a test workspace claiming its matches count.
@@ -87,14 +138,8 @@ constructor(
                 terminationReason = terminationReason,
             )
 
-        // The match is over, so no proxy may offer it as a rejoin any more. Like the
-        // leaderboard below, this sits on top of a committed result: a Valkey hiccup
-        // costs a stale offer for at most the match TTL, never the result itself.
-        try {
-            queue.endActive(matchId.toString(), match.playerIds.map(UUID::toString))
-        } catch (e: Exception) {
-            log.warn("Could not clear the players' active match (match=$matchId)", e)
-        }
+        // Like the leaderboard below, this sits on top of a committed result.
+        if (clearActive) clearActiveMatch(match)
 
         // The result is already committed by the time we get here — applyResult
         // has returned. The leaderboard is a nice-to-have on top of a result that

@@ -1,5 +1,6 @@
 package gg.grounds.allocator
 
+import gg.grounds.MatchRole
 import gg.grounds.persistence.ValkeyQueue
 import io.quarkus.redis.datasource.RedisDataSource
 import io.quarkus.scheduler.Scheduled
@@ -43,6 +44,7 @@ constructor(
     @Scheduled(
         every = "{grounds.match.watchdog.every}",
         concurrentExecution = Scheduled.ConcurrentExecution.SKIP,
+        skipExecutionIf = MatchRole.RegionalOnly::class,
     )
     fun sweep() {
         try {

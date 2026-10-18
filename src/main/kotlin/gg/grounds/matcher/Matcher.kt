@@ -1,5 +1,6 @@
 package gg.grounds.matcher
 
+import gg.grounds.MatchRole
 import gg.grounds.domain.BandedMmrMatchFunction
 import gg.grounds.domain.MatchFunction
 import gg.grounds.domain.MatchProposal
@@ -47,6 +48,7 @@ constructor(
     @Scheduled(
         every = "{grounds.match.tick}",
         concurrentExecution = Scheduled.ConcurrentExecution.SKIP,
+        skipExecutionIf = MatchRole.RegionalOnly::class,
     )
     fun tick() {
         val now = Instant.now()

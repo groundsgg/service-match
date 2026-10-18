@@ -74,6 +74,28 @@ protobuf payload.
 Protobuf therefore stays on the wire even though gRPC does not — the
 `match` contract still defines what a `StartMatch` looks like.
 
+## Asynchronous results (regional runtime + core writer)
+
+With `MATCH_RESULT_ASYNC=true`, `POST …/matches/{id}/result` checks the
+result against the match record (one round trip: 404 and 403 stay), clears
+the players' active match, and publishes it as JSON to
+`match.result.submitted.<mode>` (message id `match-result:<matchId>`). The
+region's leaf holds it in an in-memory JetStream buffer; the hub's
+`MATCH_RESULTS` stream sources every region's buffer. The answer is still
+200 with `applied`/`rated`, plus `queued: true`. A publish that is not
+acknowledged (no buffer, broker down, buffer full) is applied synchronously.
+
+The same image with `MATCH_ROLE=writer` and `MATCH_RESULT_CONSUMER_ENABLED=true`
+runs in core and applies the stream through the same idempotent transaction
+(durable `match-writer`, one message in flight). It needs no Valkey or Agones:
+the matcher, allocator, watchdog and mode load are off in that role. With
+`MATCH_LEADERBOARD_TRANSPORT=jetstream` it publishes leaderboard scores to
+`LEADERBOARD_SCORES` instead of calling service-leaderboard over HTTP.
+
+Tests that need Postgres, Valkey or NATS start containers; set
+`TEST_POSTGRES_URL` (+ `TEST_POSTGRES_USER`/`_PASSWORD`), `TEST_VALKEY_URL`
+and `TEST_NATS_URL` to use running instances instead.
+
 ## Local dev
 
 ```bash

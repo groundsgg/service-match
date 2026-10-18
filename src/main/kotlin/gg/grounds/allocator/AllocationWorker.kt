@@ -1,5 +1,6 @@
 package gg.grounds.allocator
 
+import gg.grounds.MatchRole
 import gg.grounds.domain.MatchTimeline
 import gg.grounds.domain.ServerAssignment
 import gg.grounds.matcher.ModeRegistry
@@ -60,6 +61,7 @@ constructor(
     @Scheduled(
         every = "{grounds.match.alloc.poll}",
         concurrentExecution = Scheduled.ConcurrentExecution.SKIP,
+        skipExecutionIf = MatchRole.RegionalOnly::class,
     )
     fun pump() {
         try {
