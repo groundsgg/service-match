@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.8.1](https://github.com/groundsgg/service-match/compare/v1.8.0...v1.8.1) (2026-10-18)
+
+
+### Bug Fixes
+
+* **valkey:** give the matchmaker its own Valkey client and answer 503 when the API's runs out ([#88](https://github.com/groundsgg/service-match/issues/88)) ([c0a3a9b](https://github.com/groundsgg/service-match/commit/c0a3a9bae662ea7c757d54dbbd2f121579ab8e79))
+
 ## [1.8.0](https://github.com/groundsgg/service-match/compare/v1.7.0...v1.8.0) (2026-10-18)
 
 
