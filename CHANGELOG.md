@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.8.0](https://github.com/groundsgg/service-match/compare/v1.7.0...v1.8.0) (2026-10-18)
+
+
+### Features
+
+* report match results asynchronously through JetStream ([#86](https://github.com/groundsgg/service-match/issues/86)) ([2f7327f](https://github.com/groundsgg/service-match/commit/2f7327ffa73e3f2a2c9ba5a07961da69e91cc25e))
+
 ## [1.7.0](https://github.com/groundsgg/service-match/compare/v1.6.0...v1.7.0) (2026-10-17)
 
 
