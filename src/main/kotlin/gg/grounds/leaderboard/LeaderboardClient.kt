@@ -1,6 +1,7 @@
 package gg.grounds.leaderboard
 
 import com.fasterxml.jackson.databind.ObjectMapper
+import gg.grounds.events.JetStreamPublisher
 import jakarta.annotation.PreDestroy
 import jakarta.enterprise.context.ApplicationScoped
 import jakarta.inject.Inject
@@ -37,6 +38,9 @@ constructor(
     target: String,
     @param:ConfigProperty(name = "grounds.match.leaderboard.deadline-ms", defaultValue = "5000")
     private val deadlineMs: Long,
+    @param:ConfigProperty(name = "grounds.match.leaderboard.transport", defaultValue = "http")
+    private val transport: String = "http",
+    private val stream: JetStreamPublisher? = null,
 ) {
 
     // LEADERBOARD_SERVICE_URL arrives as a bare host:port (the chart injects it
@@ -67,6 +71,26 @@ constructor(
                         "idempotencyKey" to idempotencyKey,
                     )
                 )
+
+            // `jetstream`: the core writer has no route to a regional service-leaderboard, so it
+            // publishes the same body to LEADERBOARD_SCORES, where service-leaderboard's consumer
+            // applies it. The idempotency key doubles as the message id.
+            if (transport == "jetstream") {
+                val outcome =
+                    checkNotNull(stream) { "no JetStream publisher" }
+                        .publish(
+                            "$STREAM_SUBJECT_PREFIX$boardId",
+                            idempotencyKey,
+                            body.toByteArray(),
+                        )
+                if (outcome == JetStreamPublisher.Outcome.FAILED) {
+                    log.error(
+                        "Leaderboard publish failed, result stands regardless " +
+                            "(board=$boardId, player=$playerId)"
+                    )
+                }
+                return
+            }
 
             val request =
                 HttpRequest.newBuilder(baseUri.resolve("/v1/leaderboards/$boardId/scores"))
@@ -114,6 +138,7 @@ constructor(
 
     companion object {
         private const val DEFAULT_TOKEN_PATH = "/var/run/secrets/grounds/token"
+        private const val STREAM_SUBJECT_PREFIX = "leaderboard.score.submitted."
         private val log: Logger = Logger.getLogger(LeaderboardClient::class.java)
     }
 }

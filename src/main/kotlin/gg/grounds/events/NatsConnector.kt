@@ -7,6 +7,7 @@ import io.nats.client.Options
 import io.quarkus.runtime.ShutdownEvent
 import jakarta.enterprise.context.ApplicationScoped
 import jakarta.enterprise.event.Observes
+import java.net.URI
 import java.nio.file.Files
 import java.nio.file.Path
 import java.time.Duration
@@ -32,6 +33,11 @@ class NatsConnector(
 
     @Volatile private var connection: Connection? = null
 
+    // The URL may carry a password, so only its host is ever logged.
+    private val natsHost: String = runCatching { URI.create(natsUrl).host }.getOrNull() ?: "?"
+    private val urlHasCredentials: Boolean =
+        runCatching { URI.create(natsUrl).userInfo != null }.getOrDefault(false)
+
     @Synchronized
     fun connection(): Connection? {
         connection?.let { existing ->
@@ -51,17 +57,20 @@ class NatsConnector(
                     )
             // The projected SA token as the NATS bearer, re-read per (re)connect so kubelet
             // rotation is picked up. An absent file means no token, which is right both for a
-            // local run and for the satellite leaf, which asks for no credentials at all.
+            // local run and for the satellite leaf, which asks for no credentials at all. A URL
+            // that carries its own user and password (the core writer's static hub user) gets no
+            // token on top: the hub authenticates by user, and a second credential only confuses
+            // it.
             val tokenPath = Path.of(groundsTokenFile)
-            if (Files.exists(tokenPath)) {
+            if (!urlHasCredentials && Files.exists(tokenPath)) {
                 builder.tokenSupplier { Files.readString(tokenPath).trim().toCharArray() }
             }
             Nats.connect(builder.build()).also {
                 connection = it
-                LOG.infof("Connected to NATS (url=%s)", natsUrl)
+                LOG.infof("Connected to NATS (host=%s)", natsHost)
             }
         } catch (error: Exception) {
-            LOG.errorf(error, "Failed to connect to NATS (url=%s)", natsUrl)
+            LOG.errorf(error, "Failed to connect to NATS (host=%s)", natsHost)
             connection = null
             null
         }

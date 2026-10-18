@@ -28,7 +28,7 @@ import org.eclipse.microprofile.openapi.annotations.tags.Tag
 @Produces(MediaType.APPLICATION_JSON)
 @Tag(name = "Results", description = "Report a finished match and move the ladder.")
 @SecurityRequirement(name = "bearerAuth")
-class MatchResultResource @Inject constructor(private val results: ResultService) {
+class MatchResultResource @Inject constructor(private val results: ResultSubmitter) {
 
     @POST
     @Consumes(MediaType.APPLICATION_JSON)
@@ -82,13 +82,13 @@ class MatchResultResource @Inject constructor(private val results: ResultService
                 PlayerPlacement(parsePlayerId(entry.playerId), placement)
             }
 
-        return ReportResultResponse.from(
-            results.report(
+        val submitted =
+            results.submit(
                 matchId = id,
                 placements = placements,
                 terminationReason = request.terminationReason?.ifBlank { null } ?: "normal_finish",
             )
-        )
+        return ReportResultResponse.from(submitted.outcome, submitted.queued)
     }
 
     private fun parseMatchId(raw: String?): UUID {
