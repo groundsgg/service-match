@@ -66,7 +66,9 @@ class TicketResource @Inject constructor(private val queue: QueueService) {
         ),
         APIResponse(
             responseCode = "400",
-            description = "playerId or modeId is missing or not a UUID.",
+            description =
+                "playerId or modeId is missing or not a UUID, or the requested map is not in " +
+                    "the mode's pool (or the mode has no maps).",
         ),
         APIResponse(responseCode = "401", description = "Authentication is missing or invalid."),
         APIResponse(responseCode = "404", description = "The mode has no matchmaking config."),
@@ -76,8 +78,12 @@ class TicketResource @Inject constructor(private val queue: QueueService) {
         val request = body ?: throw InvalidRequestException("a request body is required")
         val playerId = parsePlayerId(request.playerId)
         val modeId = requireNonBlank(request.modeId, "modeId")
+        val map = request.map?.trim()?.takeIf { it.isNotEmpty() }
+        if (map != null && !MAP_ADDRESS.matches(map)) {
+            throw InvalidRequestException("map must be <namespace>/<name>, got $map")
+        }
 
-        val ticket = queue.enqueue(playerId, modeId)
+        val ticket = queue.enqueue(playerId, modeId, map)
         return EnqueueResponse(
             ticketId = ticket.id,
             mu = ticket.mu,
@@ -91,9 +97,13 @@ class TicketResource @Inject constructor(private val queue: QueueService) {
     @Operation(
         summary = "Withdraw a ticket",
         description =
-            "Only succeeds while the ticket is still QUEUED — once a match has formed the " +
-                "ticket is committed. `cancelled: false` is the answer for that case and for a " +
-                "ticket that is not this player's; neither is an error.",
+            "Succeeds while the ticket is QUEUED, and while it is PREPARING — its match's " +
+                "server is still preparing the round. A preparing match left with fewer than " +
+                "the mode's minPlayers fails and its other players go back on the queue; " +
+                "otherwise it goes ahead without this one. Once a match is being allocated " +
+                "(MATCHED) or its players are sent (ASSIGNED) the ticket is committed: " +
+                "`cancelled: false` is the answer for that case and for a ticket that is not " +
+                "this player's; neither is an error.",
     )
     @APIResponses(
         APIResponse(
@@ -153,6 +163,9 @@ class TicketResource @Inject constructor(private val queue: QueueService) {
         return TicketResponse.from(ticket, queue.queueDepth(ticket.modeId))
     }
 }
+
+/** `<namespace>/<name>`, where the namespace may itself contain slashes. */
+private val MAP_ADDRESS = Regex("[^/\\s]+(/[^/\\s]+)+")
 
 /** Raised when a ticket id does not resolve. Rendered as 404 by [UnknownTicketMapper]. */
 class UnknownTicketException(ticketId: String) : RuntimeException("no such ticket: $ticketId")

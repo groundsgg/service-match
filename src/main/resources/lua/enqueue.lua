@@ -1,4 +1,4 @@
--- enqueue(ticketId, playerId, modeId, mu, sigma, nowMs, ttlSeconds, provisional) -> 1 | 0
+-- enqueue(ticketId, playerId, modeId, mu, sigma, nowMs, ttlSeconds, provisional, map) -> 1 | 0
 --
 -- Puts a player in a queue. Returns 0 if they already hold a live ticket.
 --
@@ -31,13 +31,18 @@ local ttl       = tonumber(ARGV[7])
 -- rather than this player's. Carried on the ticket so the match it forms can
 -- be recorded unranked — see Matcher.recordDurably.
 local provisional = ARGV[8]
+-- The map the player asked for, `<namespace>/<name>`, or '' for any map. The
+-- matcher only groups a ticket with tickets that asked for the same map or for
+-- none; QueueService has already checked it is in the mode's pool.
+local map = ARGV[9] or ''
 
 local existing = redis.call('GET', guardKey)
 if existing then
   local state = redis.call('HGET', 'mm:ticket:' .. existing, 'state')
-  -- A live ticket is one that is still QUEUED or already committed to a match.
+  -- A live ticket is one that is still QUEUED or already committed to a match,
+  -- including a match whose server is still preparing the round (PREPARING).
   -- Anything else (missing, CANCELLED, FAILED, ASSIGNED) is finished with.
-  if state == 'QUEUED' or state == 'MATCHED' then
+  if state == 'QUEUED' or state == 'MATCHED' or state == 'PREPARING' then
     return 0
   end
 end
@@ -53,6 +58,9 @@ redis.call('HSET', ticketKey,
   'enqueuedAt',  tostring(nowMs),
   'provisional', provisional,
   'state',       'QUEUED')
+if map ~= '' then
+  redis.call('HSET', ticketKey, 'map', map)
+end
 redis.call('EXPIRE', ticketKey, ttl)
 
 redis.call('ZADD', ratingZ, mu, ticketId)

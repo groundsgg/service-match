@@ -1,5 +1,7 @@
 package gg.grounds.api
 
+import gg.grounds.allocator.MatchHostClient
+import gg.grounds.domain.MatchState
 import gg.grounds.domain.ModeConfig
 import gg.grounds.domain.ModeLease
 import gg.grounds.domain.ModeMeta
@@ -7,11 +9,16 @@ import gg.grounds.domain.ModeSummary
 import gg.grounds.domain.Rating
 import gg.grounds.domain.RatingRepository
 import gg.grounds.domain.Ticket
+import gg.grounds.maps.MapSelection
+import gg.grounds.maps.ModeMapPool
 import gg.grounds.matcher.ModeRegistry
 import gg.grounds.metrics.MatchMetrics
+import gg.grounds.persistence.MatchStatus
 import gg.grounds.persistence.ValkeyQueue
+import gg.grounds.persistence.Withdrawal
 import jakarta.enterprise.context.ApplicationScoped
 import jakarta.inject.Inject
+import java.time.Duration
 import java.time.Instant
 import java.util.UUID
 import org.eclipse.microprofile.config.inject.ConfigProperty
@@ -22,6 +29,10 @@ class AlreadyQueuedException : RuntimeException("player already holds a live tic
 
 /** Raised when the mode has no matchmaking config — forge has not pushed one. */
 class UnknownModeException(modeId: String) : RuntimeException("unknown mode: $modeId")
+
+/** Raised when a server reports ready for a match that was given to a different server. */
+class WrongServerException(matchId: String, gameServerName: String) :
+    RuntimeException("match $matchId is not on $gameServerName")
 
 /**
  * Queue operations, between the gRPC layer and Valkey.
@@ -37,6 +48,8 @@ constructor(
     private val modes: ModeRegistry,
     private val ratings: RatingRepository,
     private val metrics: MatchMetrics,
+    private val mapSelection: MapSelection,
+    private val matchHost: MatchHostClient,
     @param:ConfigProperty(name = "grounds.match.ticket.ttl-seconds") private val ticketTtl: Long,
     @param:ConfigProperty(name = "grounds.match.rating.default-mu") private val defaultMu: Double,
     @param:ConfigProperty(name = "grounds.match.rating.default-sigma")
@@ -44,8 +57,13 @@ constructor(
     @param:ConfigProperty(name = "grounds.match.rejoin.grace-seconds") private val rejoinGrace: Long,
 ) {
 
-    fun enqueue(playerId: UUID, modeId: String): Ticket {
+    /**
+     * @param map the map the player asked for, `<namespace>/<name>`; null for any. It must be in
+     *   the mode's pinned pool, and a mode without maps takes no request at all.
+     */
+    fun enqueue(playerId: UUID, modeId: String, map: String? = null): Ticket {
         val mode = modes.find(modeId) ?: throw UnknownModeException(modeId)
+        if (map != null) requireInPool(mode.modeId, map)
 
         // Read the rating once, here, and carry it on the ticket. The matcher
         // then works purely from Valkey.
@@ -90,6 +108,7 @@ constructor(
                 sigma = rating.sigma,
                 enqueuedAt = Instant.now(),
                 provisional = provisional,
+                map = map,
             )
 
         if (!queue.enqueue(ticket, ticketTtl)) {
@@ -99,9 +118,120 @@ constructor(
         return ticket
     }
 
+    private fun requireInPool(modeId: String, map: String) {
+        val maps =
+            queue.loadMeta(modeId).maps
+                ?: throw InvalidRequestException(
+                    "mode $modeId has no maps, so none can be requested"
+                )
+        if (!mapSelection.inPool(maps, map)) {
+            throw InvalidRequestException(
+                "map $map is not in the pool of mode $modeId (namespace ${maps.namespace})"
+            )
+        }
+    }
+
+    /**
+     * Withdraw a ticket — while it is QUEUED, or while its match's server is still preparing the
+     * round. A preparing match left with fewer than the mode's minPlayers fails: the rest go back
+     * on the queue with the wait they had, and the server is told to drop the round. Otherwise it
+     * carries on without the leaver.
+     */
     fun cancel(ticketId: String, playerId: UUID): Boolean {
         val ticket = queue.findTicket(ticketId) ?: return false
-        return queue.cancel(ticketId, playerId.toString(), ticket.modeId)
+        // A team mode's minimum is a full match: one leaver ends it, as an unbalanced team would.
+        val minPlayers = modes.find(ticket.modeId)?.minPlayers ?: 1
+        val result = queue.withdraw(ticketId, playerId.toString(), ticket.modeId, minPlayers)
+        val matchId = ticket.matchId
+        if (result == Withdrawal.CANCELLED_MATCH_FAILED && matchId != null) {
+            val status = queue.matchStatus(matchId)
+            status.server?.let { matchHost.cancelMatch(it.gameServerName, matchId, "cancelled") }
+            recordReady(matchId, ticket.modeId, status, "cancelled")
+            log.info(
+                "Too few players left the preparing match, requeued the rest " +
+                    "(id=$matchId, mode=${ticket.modeId}, min=$minPlayers)"
+            )
+        }
+        return result != Withdrawal.REFUSED
+    }
+
+    /**
+     * A server reports whether the round it was preparing for [matchId] is ready.
+     *
+     * @return whether the players are routed to it: true once assigned (also on a retry after
+     *   that), false when the match is no longer waiting for this server — failed, timed out, left
+     *   by too many, or unknown — in which case the server discards the round.
+     * @throws WrongServerException when the match is on another server.
+     */
+    fun ready(matchId: String, gameServerName: String, ok: Boolean, reason: String?): Boolean {
+        val status = statusAfterPush(matchId)
+        val state = status.state ?: return false
+        val server = status.server
+        if (
+            (state == MatchState.PREPARING || state == MatchState.ASSIGNED) &&
+                server != null &&
+                server.gameServerName != gameServerName
+        ) {
+            throw WrongServerException(matchId, gameServerName)
+        }
+        if (state == MatchState.ASSIGNED) return true
+        if (state != MatchState.PREPARING || server == null) return false
+        val modeId = status.modeId.orEmpty()
+
+        if (!ok) {
+            if (queue.failRequeue(matchId, modeId, MatchState.PREPARING) >= 0) {
+                recordReady(matchId, modeId, status, "failed")
+                log.warn(
+                    "Server could not prepare the round, requeued its players " +
+                        "(id=$matchId, gs=$gameServerName, reason=${reason.orEmpty()})"
+                )
+            }
+            return false
+        }
+
+        if (queue.assign(matchId, server, MatchState.PREPARING)) {
+            recordReady(matchId, modeId, status, "ok")
+            log.info(
+                "Assigned match (id=$matchId, gs=${server.gameServerName}, " +
+                    "addr=${server.address}:${server.port})"
+            )
+            return true
+        }
+        // Lost to a concurrent ready (routed after all) or to a failure (not routed).
+        return queue.matchStatus(matchId).state == MatchState.ASSIGNED
+    }
+
+    /**
+     * The match's status once the allocation worker has recorded the server's acceptance. A server
+     * whose round was ready the moment it accepted (a world prepared in advance) can report ready
+     * before the worker has moved the match from FORMED to PREPARING; answering that with `routed:
+     * false` would throw the round away, so a FORMED match is re-read for a moment.
+     */
+    private fun statusAfterPush(matchId: String): MatchStatus {
+        var status = queue.matchStatus(matchId)
+        val deadline = System.nanoTime() + READY_RACE_WAIT.toNanos()
+        while (status.state == MatchState.FORMED && System.nanoTime() < deadline) {
+            Thread.sleep(READY_RACE_POLL.toMillis())
+            status = queue.matchStatus(matchId)
+        }
+        return status
+    }
+
+    /** How long the server prepared, by how it ended, with the timeline log line. */
+    private fun recordReady(matchId: String, modeId: String, status: MatchStatus, result: String) {
+        val took = status.preparingAt?.let { Duration.between(it, Instant.now()) }
+        took?.let { metrics.timeToReady(modeId, result, it) }
+        log.info(
+            "Match timeline (match=$matchId, mode=$modeId, stage=ready, result=$result, " +
+                "gs=${status.server?.gameServerName}" +
+                (took?.let { ", readyMs=${it.toMillis()})" } ?: ")")
+        )
+    }
+
+    /** The maps a mode can be queued for, or null if there is no such mode. */
+    fun modeMaps(modeId: String): ModeMapPool? {
+        if (modes.find(modeId) == null) return null
+        return mapSelection.pool(queue.loadMeta(modeId).maps)
     }
 
     fun findTicket(ticketId: String): Ticket? = queue.findTicket(ticketId)
@@ -187,5 +317,9 @@ constructor(
 
     companion object {
         private val log: Logger = Logger.getLogger(QueueService::class.java)
+
+        /** Longer than the worker needs from the StartMatch reply to the prepare script. */
+        private val READY_RACE_WAIT: Duration = Duration.ofSeconds(3)
+        private val READY_RACE_POLL: Duration = Duration.ofMillis(50)
     }
 }

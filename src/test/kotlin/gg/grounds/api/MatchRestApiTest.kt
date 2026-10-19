@@ -1,7 +1,9 @@
 package gg.grounds.api
 
+import gg.grounds.domain.MapSelectionStrategy
 import gg.grounds.domain.ModeConfig
 import gg.grounds.domain.ModeLease
+import gg.grounds.domain.ModeMaps
 import gg.grounds.domain.ModeMeta
 import gg.grounds.domain.ModeSummary
 import gg.grounds.domain.Rating
@@ -12,6 +14,7 @@ import gg.grounds.domain.StatBoard
 import gg.grounds.domain.StoredRating
 import gg.grounds.domain.Ticket
 import gg.grounds.domain.TicketState
+import gg.grounds.maps.ModeMapPool
 import gg.grounds.persistence.ValkeyQueueIT
 import io.quarkus.test.InjectMock
 import io.quarkus.test.common.QuarkusTestResource
@@ -127,6 +130,66 @@ class MatchRestApiTest {
             .then()
             .statusCode(400)
             .body("code", equalTo("invalid_request"))
+    }
+
+    @Test
+    fun `an enqueue may ask for a map`() {
+        whenever(queue.enqueue(PLAYER, MODE, "survivalgames/aura")).thenReturn(ticket())
+        whenever(queue.queueDepth(MODE)).thenReturn(1)
+
+        given()
+            .contentType(ContentType.JSON)
+            .body("""{"playerId":"$PLAYER","modeId":"$MODE","map":" survivalgames/aura "}""")
+            .post("/v1/match/tickets")
+            .then()
+            .statusCode(201)
+            .body("ticketId", equalTo(TICKET))
+
+        verify(queue).enqueue(PLAYER, MODE, "survivalgames/aura")
+    }
+
+    @Test
+    fun `a blank map means any map`() {
+        whenever(queue.enqueue(PLAYER, MODE, null)).thenReturn(ticket())
+
+        given()
+            .contentType(ContentType.JSON)
+            .body("""{"playerId":"$PLAYER","modeId":"$MODE","map":"  "}""")
+            .post("/v1/match/tickets")
+            .then()
+            .statusCode(201)
+
+        verify(queue).enqueue(PLAYER, MODE, null)
+    }
+
+    @Test
+    fun `a map that is not an address never reaches the queue`() {
+        for (map in listOf("aura", "survivalgames/", "/aura", "survival games/aura")) {
+            given()
+                .contentType(ContentType.JSON)
+                .body("""{"playerId":"$PLAYER","modeId":"$MODE","map":"$map"}""")
+                .post("/v1/match/tickets")
+                .then()
+                .statusCode(400)
+                .body("code", equalTo("invalid_request"))
+        }
+        verify(queue, never()).enqueue(any(), any(), anyOrNull())
+    }
+
+    @Test
+    fun `a map outside the mode's pool is 400`() {
+        // QueueService decides it against the pinned pool; the resource only renders it.
+        whenever(queue.enqueue(PLAYER, MODE, "survivalgames/gone"))
+            .thenThrow(InvalidRequestException("map survivalgames/gone is not in the pool"))
+
+        given()
+            .contentType(ContentType.JSON)
+            .body("""{"playerId":"$PLAYER","modeId":"$MODE","map":"survivalgames/gone"}""")
+            .post("/v1/match/tickets")
+            .then()
+            .statusCode(400)
+            .body("code", equalTo("invalid_request"))
+            .body("detail", equalTo("map survivalgames/gone is not in the pool"))
     }
 
     // -----------------------------------------------------------
@@ -280,8 +343,110 @@ class MatchRestApiTest {
     }
 
     // -----------------------------------------------------------
+    // GET /v1/match/modes/{mode}/maps
+    // -----------------------------------------------------------
+
+    @Test
+    fun `a mode's map pool lists its pinned maps`() {
+        whenever(queue.modeMaps(MODE))
+            .thenReturn(
+                ModeMapPool(
+                    listOf("survivalgames/aura", "survivalgames/breeze"),
+                    MapSelectionStrategy.RANDOM,
+                )
+            )
+
+        given()
+            .get("/v1/match/modes/$MODE/maps")
+            .then()
+            .statusCode(200)
+            .body("maps", equalTo(listOf("survivalgames/aura", "survivalgames/breeze")))
+            .body("selection", equalTo("RANDOM"))
+    }
+
+    @Test
+    fun `a mode without maps has an empty pool`() {
+        whenever(queue.modeMaps(MODE)).thenReturn(ModeMapPool(emptyList(), null))
+
+        given()
+            .get("/v1/match/modes/$MODE/maps")
+            .then()
+            .statusCode(200)
+            .body("maps", equalTo(emptyList<String>()))
+            .body("selection", nullValue())
+    }
+
+    @Test
+    fun `the maps of an unknown mode are 404`() {
+        whenever(queue.modeMaps(MODE)).thenReturn(null)
+
+        given()
+            .get("/v1/match/modes/$MODE/maps")
+            .then()
+            .statusCode(404)
+            .body("code", equalTo("unknown_mode"))
+    }
+
+    // -----------------------------------------------------------
     // PUT /v1/match/modes/{mode}/queue
     // -----------------------------------------------------------
+
+    @Test
+    fun `a lease can register the mode's map pool`() {
+        whenever(queue.upsertMode(any(), any(), anyOrNull())).thenReturn(true)
+
+        given()
+            .contentType(ContentType.JSON)
+            .body(
+                """{"teamSize":1,"teamCount":24,"minPlayers":2,"leaseId":"sg-abc12",""" +
+                    """"maps":{"namespace":"survivalgames","selection":"random"}}"""
+            )
+            .put("/v1/match/modes/survivalgames-solo/queue")
+            .then()
+            .statusCode(200)
+
+        val meta = argumentCaptor<ModeMeta>()
+        verify(queue).upsertMode(any(), meta.capture(), any())
+        assertEquals(ModeMaps("survivalgames", MapSelectionStrategy.RANDOM), meta.firstValue.maps)
+    }
+
+    @Test
+    fun `a map pool without a selection is random`() {
+        whenever(queue.upsertMode(any(), any(), anyOrNull())).thenReturn(true)
+
+        given()
+            .contentType(ContentType.JSON)
+            .body("""{"teamSize":1,"teamCount":2,"maps":{"namespace":"duel/"}}""")
+            .put("/v1/match/modes/$MODE/queue")
+            .then()
+            .statusCode(200)
+
+        val meta = argumentCaptor<ModeMeta>()
+        verify(queue).upsertMode(any(), meta.capture(), anyOrNull())
+        assertEquals(ModeMaps("duel", MapSelectionStrategy.RANDOM), meta.firstValue.maps)
+    }
+
+    @Test
+    fun `invalid map pools are refused`() {
+        val invalid =
+            listOf(
+                """"maps":{}""",
+                """"maps":{"namespace":"  "}""",
+                """"maps":{"namespace":"survival games"}""",
+                """"maps":{"namespace":"survivalgames","selection":"PICK_BAN"}""",
+                """"maps":{"namespace":"survivalgames","selection":"best"}""",
+            )
+        for (fields in invalid) {
+            given()
+                .contentType(ContentType.JSON)
+                .body("""{"teamSize":1,"teamCount":2,$fields}""")
+                .put("/v1/match/modes/$MODE/queue")
+                .then()
+                .statusCode(400)
+                .body("code", equalTo("invalid_request"))
+        }
+        verify(queue, never()).upsertMode(any(), any(), anyOrNull())
+    }
 
     @Test
     fun `an upsert without a band uses the defaults`() {
@@ -731,6 +896,89 @@ class MatchRestApiTest {
     }
 
     // -----------------------------------------------------------
+    // POST /v1/match/matches/{id}/ready
+    // -----------------------------------------------------------
+
+    @Test
+    fun `a ready round routes its players`() {
+        val matchId = UUID.randomUUID().toString()
+        whenever(queue.ready(matchId, "sg-abc12", true, null)).thenReturn(true)
+
+        given()
+            .contentType(ContentType.JSON)
+            .body("""{"gameServerName":"sg-abc12","ok":true}""")
+            .post("/v1/match/matches/$matchId/ready")
+            .then()
+            .statusCode(200)
+            .body("routed", equalTo(true))
+    }
+
+    @Test
+    fun `a match that stopped waiting answers routed false`() {
+        val matchId = UUID.randomUUID().toString()
+        whenever(queue.ready(matchId, "sg-abc12", true, null)).thenReturn(false)
+
+        given()
+            .contentType(ContentType.JSON)
+            .body("""{"gameServerName":"sg-abc12","ok":true}""")
+            .post("/v1/match/matches/$matchId/ready")
+            .then()
+            .statusCode(200)
+            .body("routed", equalTo(false))
+    }
+
+    @Test
+    fun `a round that could not be prepared passes its reason on`() {
+        val matchId = UUID.randomUUID().toString()
+        whenever(queue.ready(matchId, "sg-abc12", false, "map failed to load")).thenReturn(false)
+
+        given()
+            .contentType(ContentType.JSON)
+            .body("""{"gameServerName":"sg-abc12","ok":false,"reason":"map failed to load"}""")
+            .post("/v1/match/matches/$matchId/ready")
+            .then()
+            .statusCode(200)
+            .body("routed", equalTo(false))
+
+        verify(queue).ready(matchId, "sg-abc12", false, "map failed to load")
+    }
+
+    @Test
+    fun `ready from another server is 409`() {
+        val matchId = UUID.randomUUID().toString()
+        whenever(queue.ready(matchId, "sg-other", true, null))
+            .thenThrow(WrongServerException(matchId, "sg-other"))
+
+        given()
+            .contentType(ContentType.JSON)
+            .body("""{"gameServerName":"sg-other","ok":true}""")
+            .post("/v1/match/matches/$matchId/ready")
+            .then()
+            .statusCode(409)
+            .contentType("application/problem+json")
+            .body("code", equalTo("wrong_server"))
+    }
+
+    @Test
+    fun `an incomplete ready is refused before the queue is touched`() {
+        val matchId = UUID.randomUUID().toString()
+        for (body in listOf("""{"ok":true}""", """{"gameServerName":"sg-abc12"}""", "{}")) {
+            given()
+                .contentType(ContentType.JSON)
+                .body(body)
+                .post("/v1/match/matches/$matchId/ready")
+                .then()
+                .statusCode(400)
+                .body("code", equalTo("invalid_request"))
+        }
+        given()
+            .contentType(ContentType.JSON)
+            .body("""{"gameServerName":"sg-abc12","ok":true}""")
+            .post("/v1/match/matches/not-a-uuid/ready")
+            .then()
+            .statusCode(400)
+        verify(queue, never()).ready(any(), any(), any(), anyOrNull())
+    }
 
     // -----------------------------------------------------------
     // /v1/match/players/{id}/match

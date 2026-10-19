@@ -28,13 +28,47 @@ data class Ticket(
     val state: TicketState = TicketState.QUEUED,
     val matchId: String? = null,
     val assignment: ServerAssignment? = null,
+    /**
+     * The map the player asked for, `<namespace>/<name>`, or null for any map. Such a ticket only
+     * matches tickets that asked for the same map or for none, and the match then plays it.
+     */
+    val map: String? = null,
 )
 
 enum class TicketState {
     QUEUED,
     MATCHED,
+    /**
+     * The match has a server, which is preparing the round; the player is not routed until it
+     * reports ready. Still the player's one live ticket, and still withdrawable.
+     */
+    PREPARING,
     ASSIGNED,
     CANCELLED,
+    FAILED,
+}
+
+/**
+ * Where a match stands, as the `state` field of its `mm:match:{id}` hash. The Lua scripts compare
+ * these names, so they are part of the storage format.
+ *
+ * FORMED → (MAP_SELECTION →) PREPARING → ASSIGNED, or FAILED from anywhere before ASSIGNED. A
+ * server that does not signal readiness takes a match straight from FORMED to ASSIGNED, as before.
+ */
+enum class MatchState {
+    /** Claimed; the allocation worker is finding it a server. */
+    FORMED,
+    /**
+     * Reserved for a map vote (pick/ban): the match would wait here, with `mapCandidates` and
+     * `mapDeadlineAt` on its hash, until the vote decides. Nothing enters it yet — see
+     * [gg.grounds.maps.MapDecision.Deferred].
+     */
+    MAP_SELECTION,
+    /** A server accepted it and is preparing the round; `gsName` and `preparingAt` are set. */
+    PREPARING,
+    /** The players are routed. The server owns the match from here. */
+    ASSIGNED,
+    /** Given up on; its players were requeued or cancelled. */
     FAILED,
 }
 
@@ -54,7 +88,13 @@ data class MatchTimeline(
 )
 
 /** What the matcher proposes; only the claim script decides whether it happens. */
-data class MatchProposal(val matchId: String, val teams: List<List<String>>, val quality: Double) {
+data class MatchProposal(
+    val matchId: String,
+    val teams: List<List<String>>,
+    val quality: Double,
+    /** The map a ticket of this match asked for, or null when none did. */
+    val map: String? = null,
+) {
     val ticketIds: List<String>
         get() = teams.flatten()
 
@@ -131,7 +171,29 @@ data class ModeMeta(
     val boards: List<StatBoard> = emptyList(),
     /** Whether a disconnected player may rejoin a running match. */
     val rejoinEnabled: Boolean = false,
+    /** Where the mode's maps come from and how one is chosen; null for a mode without maps. */
+    val maps: ModeMaps? = null,
 )
+
+/**
+ * A mode's map pool: every map pinned for this environment under [namespace], e.g. `survivalgames`
+ * → `survivalgames/aura`, `survivalgames/breeze`.
+ */
+data class ModeMaps(
+    val namespace: String,
+    val selection: MapSelectionStrategy = MapSelectionStrategy.RANDOM,
+)
+
+/** How a match's map is chosen when none of its players asked for one. */
+enum class MapSelectionStrategy {
+    /** Uniformly at random from the pool, preferring maps that ship a pre-lit world. */
+    RANDOM,
+    /**
+     * Reserved: the players pick and ban from a few candidates before the match starts. Not
+     * implemented; a lease asking for it is refused.
+     */
+    PICK_BAN,
+}
 
 data class StatBoard(val stat: String, val displayName: String)
 

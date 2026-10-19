@@ -1,7 +1,9 @@
 package gg.grounds.api
 
+import gg.grounds.domain.MapSelectionStrategy
 import gg.grounds.domain.ModeConfig
 import gg.grounds.domain.ModeLease
+import gg.grounds.domain.ModeMaps
 import gg.grounds.domain.ModeMeta
 import gg.grounds.domain.StatBoard
 import gg.grounds.security.WorkloadAuthenticator
@@ -220,7 +222,65 @@ constructor(private val queue: QueueService, private val authenticator: Workload
             icon = request.icon?.trim()?.takeIf { it.isNotEmpty() },
             boards = boards,
             rejoinEnabled = request.rejoinEnabled,
+            maps = request.maps?.let(::maps),
         )
+    }
+
+    private fun maps(body: MapsBody): ModeMaps {
+        val namespace =
+            body.namespace?.trim()?.trim('/')?.takeIf { it.isNotEmpty() }
+                ?: throw InvalidRequestException("maps.namespace is required")
+        if (namespace.length > MAX_NAMESPACE_LENGTH || namespace.any { it.isWhitespace() }) {
+            throw InvalidRequestException(
+                "maps.namespace must be at most 128 characters, without whitespace"
+            )
+        }
+        val selection =
+            body.selection
+                ?.trim()
+                ?.takeIf { it.isNotEmpty() }
+                ?.uppercase()
+                ?.let { name ->
+                    MapSelectionStrategy.entries.firstOrNull { it.name == name }
+                        ?: throw InvalidRequestException("maps.selection must be RANDOM")
+                } ?: MapSelectionStrategy.RANDOM
+        if (selection != MapSelectionStrategy.RANDOM) {
+            // Reserved for a map vote that does not exist yet; accepting it would silently play
+            // random maps under a name that promises something else.
+            throw InvalidRequestException("maps.selection $selection is not supported yet")
+        }
+        return ModeMaps(namespace, selection)
+    }
+
+    @GET
+    @Path("/{modeId}/maps")
+    @Blocking
+    @Operation(
+        summary = "The maps a mode can be queued for",
+        description =
+            "Every map pinned for this environment under the mode's map namespace — what " +
+                "`map` on POST /v1/match/tickets accepts, and what a proxy completes " +
+                "`/queue <mode> <map>` from. Empty for a mode without maps.",
+    )
+    @APIResponses(
+        APIResponse(
+            responseCode = "200",
+            description = "The mode's map pool.",
+            content =
+                [
+                    Content(
+                        mediaType = MediaType.APPLICATION_JSON,
+                        schema = Schema(implementation = ModeMapsResponse::class),
+                    )
+                ],
+        ),
+        APIResponse(responseCode = "401", description = "Authentication is missing or invalid."),
+        APIResponse(responseCode = "404", description = "There is no such mode."),
+    )
+    fun maps(@PathParam("modeId") modeId: String?): ModeMapsResponse {
+        val id = requireNonBlank(modeId, "modeId")
+        val pool = queue.modeMaps(id) ?: throw UnknownModeException(id)
+        return ModeMapsResponse(maps = pool.maps, selection = pool.selection?.name)
     }
 
     @GET
@@ -265,6 +325,7 @@ constructor(private val queue: QueueService, private val authenticator: Workload
         /** A pod's HOSTNAME is at most a DNS name. */
         private const val MAX_LEASE_ID_LENGTH = 253
         private const val MAX_DISPLAY_NAME_LENGTH = 64
+        private const val MAX_NAMESPACE_LENGTH = 128
         private val STAT_PATTERN = Regex("[a-z0-9_-]{1,32}")
     }
 }

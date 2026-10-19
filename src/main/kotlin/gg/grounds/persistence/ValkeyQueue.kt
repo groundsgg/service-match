@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.DeserializationFeature
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue
 import gg.grounds.domain.BandConfig
+import gg.grounds.domain.MatchState
 import gg.grounds.domain.MatchTimeline
 import gg.grounds.domain.ModeConfig
 import gg.grounds.domain.ModeLease
@@ -83,6 +84,7 @@ class ValkeyQueue @Inject constructor(private val redis: RedisDataSource) {
                     ticket.enqueuedAt.toEpochMilli().toString(),
                     ttlSeconds.toString(),
                     if (ticket.provisional) "1" else "0",
+                    ticket.map.orEmpty(),
                 ),
         ) == 1L
 
@@ -122,43 +124,194 @@ class ValkeyQueue @Inject constructor(private val redis: RedisDataSource) {
                 },
         ) == 1L
 
-    /** @return false if another assigner already won this match. */
-    fun assign(matchId: String, assignment: ServerAssignment): Boolean =
+    /**
+     * Route the match's players to [assignment]. With [requiredState], only a match in that state
+     * is assigned — the ready call passes PREPARING, so a match failed a moment earlier stays
+     * failed.
+     *
+     * @return false if another assigner already won this match, or it is not in [requiredState].
+     */
+    fun assign(
+        matchId: String,
+        assignment: ServerAssignment,
+        requiredState: MatchState? = null,
+    ): Boolean =
         eval(
             "assign",
-            keys = listOf(matchKey(matchId), LIVE_MATCHES),
+            keys = listOf(matchKey(matchId), LIVE_MATCHES, PREPARING_MATCHES),
             args =
                 listOf(
                     assignment.gameServerName,
                     assignment.address,
                     assignment.port.toString(),
                     matchId,
+                    requiredState?.name.orEmpty(),
+                ),
+        ) == 1L
+
+    /**
+     * A server accepted the match and will report when the round is ready: the match and its
+     * tickets become PREPARING, and the server is recorded on the match only — nobody is routed
+     * yet. See prepare.lua.
+     *
+     * @return false if the match is no longer FORMED.
+     */
+    fun prepare(matchId: String, assignment: ServerAssignment, now: Instant): Boolean =
+        eval(
+            "prepare",
+            keys = listOf(matchKey(matchId), PREPARING_MATCHES),
+            args =
+                listOf(
+                    assignment.gameServerName,
+                    assignment.address,
+                    assignment.port.toString(),
+                    matchId,
+                    now.toEpochMilli().toString(),
                 ),
         ) == 1L
 
     /** @return false if the ticket was already past QUEUED, or is not this player's. */
     fun cancel(ticketId: String, playerId: String, modeId: String): Boolean =
-        eval(
-            "cancel",
-            keys =
-                listOf(ticketKey(ticketId), ratingKey(modeId), waitKey(modeId), guardKey(playerId)),
-            args = listOf(ticketId, playerId),
-        ) == 1L
+        withdraw(ticketId, playerId, modeId) != Withdrawal.REFUSED
+
+    /**
+     * Withdraw a ticket that is QUEUED, or PREPARING in a match whose server is still preparing the
+     * round. A PREPARING match left with fewer than [minPlayers] players fails, and the rest go
+     * back on the queue — all in one script, so two players leaving at once cannot both miss it.
+     */
+    fun withdraw(
+        ticketId: String,
+        playerId: String,
+        modeId: String,
+        minPlayers: Int = 1,
+    ): Withdrawal =
+        when (
+            eval(
+                "cancel",
+                keys =
+                    listOf(
+                        ticketKey(ticketId),
+                        ratingKey(modeId),
+                        waitKey(modeId),
+                        guardKey(playerId),
+                        LIVE_MATCHES,
+                        PREPARING_MATCHES,
+                    ),
+                args = listOf(ticketId, playerId, minPlayers.toString()),
+            )
+        ) {
+            1L -> Withdrawal.CANCELLED
+            2L -> Withdrawal.CANCELLED_MATCH_FAILED
+            else -> Withdrawal.REFUSED
+        }
 
     /**
      * Fail a match whose mode is gone and cancel its tickets, releasing the players' guards. Unlike
      * [failRequeue], nothing goes back into a queue nobody matches any more.
      */
     fun failCancel(matchId: String): Long =
-        eval("fail_cancel", keys = listOf(matchKey(matchId), LIVE_MATCHES), args = listOf(matchId))
-
-    /** Put a failed match's tickets back, keeping the waiting time they earned. */
-    fun failRequeue(matchId: String, modeId: String): Long =
         eval(
-            "fail_requeue",
-            keys = listOf(matchKey(matchId), ratingKey(modeId), waitKey(modeId), LIVE_MATCHES),
+            "fail_cancel",
+            keys = listOf(matchKey(matchId), LIVE_MATCHES, PREPARING_MATCHES),
             args = listOf(matchId),
         )
+
+    /**
+     * Put a failed match's tickets back, keeping the waiting time they earned.
+     *
+     * With [requiredState], only a match in that state is failed, and -1 says it was not: of two
+     * callers failing the same PREPARING match, only the first sees a count.
+     */
+    fun failRequeue(matchId: String, modeId: String, requiredState: MatchState? = null): Long =
+        eval(
+            "fail_requeue",
+            keys =
+                listOf(
+                    matchKey(matchId),
+                    ratingKey(modeId),
+                    waitKey(modeId),
+                    LIVE_MATCHES,
+                    PREPARING_MATCHES,
+                ),
+            args = listOf(matchId, requiredState?.name.orEmpty()),
+        )
+
+    /** Where a match stands; every field null for a match that does not exist (any more). */
+    fun matchStatus(matchId: String): MatchStatus {
+        val h =
+            hashes.hmget(
+                matchKey(matchId),
+                "state",
+                "modeId",
+                "gsName",
+                "address",
+                "port",
+                "preparingAt",
+            )
+        val gsName = h["gsName"]
+        val address = h["address"]
+        val port = h["port"]?.toIntOrNull()
+        return MatchStatus(
+            state = h["state"]?.let { name -> MatchState.entries.firstOrNull { it.name == name } },
+            modeId = h["modeId"],
+            server =
+                if (gsName != null && address != null && port != null) {
+                    ServerAssignment(gsName, address, port)
+                } else {
+                    null
+                },
+            preparingAt = h["preparingAt"]?.toLongOrNull()?.let(Instant::ofEpochMilli),
+        )
+    }
+
+    /** PREPARING matches whose server started preparing at or before [cutoff], oldest first. */
+    fun preparingSince(cutoff: Instant): List<String> {
+        val reply =
+            redis.execute(
+                "ZRANGEBYSCORE",
+                PREPARING_MATCHES,
+                "-inf",
+                cutoff.toEpochMilli().toString(),
+            ) ?: return emptyList()
+        return (0 until reply.size()).mapNotNull { reply[it]?.toString() }
+    }
+
+    /** How many matches are PREPARING right now. */
+    fun preparingCount(): Long = sortedSets.zcard(PREPARING_MATCHES)
+
+    /** Take a match that is no longer PREPARING off the prepare-timeout worklist. */
+    fun forgetPreparing(matchId: String) {
+        sortedSets.zrem(PREPARING_MATCHES, matchId)
+    }
+
+    /**
+     * The map a ticket of the match asked for, or null when none did. The matcher only groups
+     * tickets that asked for the same map or for none, so the first one found is the match's.
+     */
+    fun requestedMap(matchId: String): String? {
+        val tickets = hashes.hget(matchKey(matchId), "tickets") ?: return null
+        return tickets
+            .split(',')
+            .filter { it.isNotEmpty() }
+            .firstNotNullOfOrNull { id ->
+                hashes.hget(ticketKey(id), "map")?.takeIf { it.isNotEmpty() }
+            }
+    }
+
+    /**
+     * The map an earlier allocation attempt chose for the match, "" when it chose none, or null
+     * when nothing has been chosen yet. A retry keeps the first choice.
+     */
+    fun chosenMap(matchId: String): String? {
+        val h = hashes.hmget(matchKey(matchId), "map", "mapStrategy")
+        if (h["mapStrategy"] == null) return null
+        return h["map"].orEmpty()
+    }
+
+    /** Record the match's map and the rule that chose it. */
+    fun storeMap(matchId: String, address: String, strategy: String) {
+        hashes.hset(matchKey(matchId), mapOf("map" to address, "mapStrategy" to strategy))
+    }
 
     fun findTicket(id: String): Ticket? {
         val h: Map<String, String> = hashes.hgetall(ticketKey(id))
@@ -178,6 +331,7 @@ class ValkeyQueue @Inject constructor(private val redis: RedisDataSource) {
             provisional = h["provisional"] == "1",
             state = TicketState.valueOf(h.getValue("state")),
             matchId = h["matchId"],
+            map = h["map"]?.takeIf { it.isNotEmpty() },
             assignment =
                 if (gsName != null && address != null && port != null) {
                     ServerAssignment(gsName, address, port)
@@ -430,6 +584,7 @@ class ValkeyQueue @Inject constructor(private val redis: RedisDataSource) {
             listOf(
                 "enqueue",
                 "claim",
+                "prepare",
                 "assign",
                 "cancel",
                 "fail_requeue",
@@ -443,6 +598,12 @@ class ValkeyQueue @Inject constructor(private val redis: RedisDataSource) {
 
         /** Matches that exist but no server has taken yet — the watchdog's worklist. */
         const val LIVE_MATCHES = "mm:matches:live"
+
+        /**
+         * Matches whose server is preparing the round, scored by when it started: the prepare
+         * timeout's worklist and the PREPARING gauge. Also on [LIVE_MATCHES] until assigned.
+         */
+        const val PREPARING_MATCHES = "mm:matches:preparing"
 
         /** Every mode this matchmaker knows about, so a restart does not silently drop a queue. */
         const val MODES_KEY = "mm:modes"
@@ -467,3 +628,21 @@ class ValkeyQueue @Inject constructor(private val redis: RedisDataSource) {
         fun leasesKey(modeId: String) = "mm:mode:$modeId:leases"
     }
 }
+
+/** What withdrawing a ticket did; see [ValkeyQueue.withdraw]. */
+enum class Withdrawal {
+    /** Too late (its match is being allocated, or has its players), or not this player's ticket. */
+    REFUSED,
+    /** Withdrawn. A PREPARING match it left carries on without it. */
+    CANCELLED,
+    /** Withdrawn, and its PREPARING match fell below its minimum: the rest were requeued. */
+    CANCELLED_MATCH_FAILED,
+}
+
+/** A match's state and, once one has it, its server; see [ValkeyQueue.matchStatus]. */
+data class MatchStatus(
+    val state: MatchState?,
+    val modeId: String?,
+    val server: ServerAssignment?,
+    val preparingAt: Instant?,
+)

@@ -1,5 +1,6 @@
 package gg.grounds.allocator
 
+import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.google.protobuf.InvalidProtocolBufferException
 import gg.grounds.domain.ServerAssignment
 import gg.grounds.events.NatsConnector
@@ -40,7 +41,8 @@ constructor(
 ) {
 
     /**
-     * @return true when the server has the match — including when it already had it.
+     * @return whether the server has the match — including when it already had it — and whether it
+     *   will report the round ready on its own before its players may be sent.
      *
      * A refusal, a timeout and an unreachable server are all the same answer here: *this match is
      * not going to start on this server*. The caller puts the players back on the queue with the
@@ -49,6 +51,10 @@ constructor(
      * The match timeline rides along as NATS headers rather than in the proto, so a game server
      * that does not read them is unaffected: [enqueuedAt] (each roster player's ticket enqueue),
      * [formedAt] and the [traceparent] of the match trace. Whatever is missing is left out.
+     *
+     * [mapAddress] is the map the matchmaker chose, empty for none. [waitForReady] tells the server
+     * the players can wait in the queue until it reports the round ready; a server that will do so
+     * answers with `signals_ready`, and one that predates it never does.
      */
     fun startMatch(
         server: ServerAssignment,
@@ -58,12 +64,14 @@ constructor(
         enqueuedAt: Map<String, Instant> = emptyMap(),
         formedAt: Instant? = null,
         traceparent: String? = null,
-    ): Boolean {
+        mapAddress: String = "",
+        waitForReady: Boolean = true,
+    ): StartMatchResult {
         if (teams.isEmpty() || teams.all { it.isEmpty() }) {
             // Nothing to start. Better caught here than by the server, which would
             // build an arena for nobody.
             log.error("Refusing to push an empty match (id=$matchId)")
-            return false
+            return StartMatchResult.REFUSED
         }
 
         val request =
@@ -71,6 +79,8 @@ constructor(
                 .setMatchId(matchId)
                 .setModeId(modeId)
                 .addAllTeams(teams.map { MatchTeam.newBuilder().addAllPlayerIds(it).build() })
+                .setMapAddress(mapAddress)
+                .setWaitForReady(waitForReady)
                 .build()
 
         val headers = Headers()
@@ -86,18 +96,47 @@ constructor(
         return pushOverNats(server, request, headers)
     }
 
+    /**
+     * Tell [gameServerName] to drop the round it is preparing for [matchId] — its players went back
+     * on the queue (the prepare timed out, or too many left). Fire-and-forget over core NATS: a
+     * server that misses it discards the round anyway when its ready call answers `routed: false`.
+     *
+     * Published to `<prefix>.<gameServerName>.cancel` as `{"matchId": ..., "reason": ...}`, the
+     * reason one of `timeout`, `cancelled` or `failed`.
+     *
+     * @return false if it could not be published.
+     */
+    fun cancelMatch(gameServerName: String, matchId: String, reason: String): Boolean {
+        val connection = nats.connection()
+        if (connection == null) {
+            log.warn("No NATS connection to cancel the match on $gameServerName (id=$matchId)")
+            return false
+        }
+        val subject = "$subjectPrefix.$gameServerName.cancel"
+        return try {
+            connection.publish(
+                subject,
+                json.writeValueAsBytes(linkedMapOf("matchId" to matchId, "reason" to reason)),
+            )
+            true
+        } catch (e: Exception) {
+            log.warn("Could not publish the cancel on $subject (id=$matchId): ${e.message}")
+            false
+        }
+    }
+
     private fun pushOverNats(
         server: ServerAssignment,
         request: StartMatchRequest,
         headers: Headers,
-    ): Boolean {
+    ): StartMatchResult {
         val connection = nats.connection()
         if (connection == null) {
             log.warn(
                 "No NATS connection to push the match to ${server.gameServerName} " +
                     "(id=${request.matchId})"
             )
-            return false
+            return StartMatchResult.REFUSED
         }
         val subject = "$subjectPrefix.${server.gameServerName}.start"
 
@@ -117,7 +156,7 @@ constructor(
                     "Nobody answered on $subject for ${server.gameServerName} " +
                         "(id=${request.matchId})"
                 )
-                return false
+                return StartMatchResult.REFUSED
             }
 
             val parsed = StartMatchReply.parseFrom(reply.data)
@@ -127,11 +166,12 @@ constructor(
                         "gs=${server.gameServerName}, reason=${parsed.reason})"
                 )
             }
-            parsed.accepted
+            // An older server leaves signals_ready unset: it is ready when it accepts.
+            StartMatchResult(parsed.accepted, parsed.accepted && parsed.signalsReady)
         } catch (e: InvalidProtocolBufferException) {
             // Something answered on this subject and it was not a game server.
             log.error("Unparseable StartMatch reply from $subject (id=${request.matchId})", e)
-            false
+            StartMatchResult.REFUSED
         } catch (e: Exception) {
             // We cannot tell a lost request from a lost reply, so the server may in fact be
             // building this arena right now. Treating that as failure costs a leaked slot the
@@ -141,15 +181,28 @@ constructor(
                 "NATS push failed for ${server.gameServerName} " +
                     "(id=${request.matchId}, subject=$subject): ${e.message}"
             )
-            false
+            StartMatchResult.REFUSED
         }
     }
 
     companion object {
         private val log: Logger = Logger.getLogger(MatchHostClient::class.java)
+        private val json = jacksonObjectMapper()
 
         const val TRACEPARENT_HEADER = "traceparent"
         const val ENQUEUED_AT_HEADER = "grounds-enqueued-at"
         const val FORMED_AT_HEADER = "grounds-formed-at"
+    }
+}
+
+/** A game server's answer to StartMatch. */
+data class StartMatchResult(
+    /** The server has the match. */
+    val accepted: Boolean,
+    /** It is preparing the round and will report it ready; until then nobody is routed. */
+    val signalsReady: Boolean = false,
+) {
+    companion object {
+        val REFUSED = StartMatchResult(accepted = false)
     }
 }

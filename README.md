@@ -74,6 +74,45 @@ protobuf payload.
 Protobuf therefore stays on the wire even though gRPC does not — the
 `match` contract still defines what a `StartMatch` looks like.
 
+## A match's way to its server
+
+A ticket goes `QUEUED → MATCHED → (PREPARING →) ASSIGNED`, or ends `CANCELLED`
+or `FAILED`; its match goes `FORMED → (PREPARING →) ASSIGNED`, or `FAILED`.
+`MAP_SELECTION` is reserved between FORMED and PREPARING for a future map vote.
+
+1. The matcher claims a match (FORMED) and the allocation worker gets it a
+   GameServer and chooses its map: the map a ticket asked for, else one at
+   random from the mode's pinned pool (preferring pre-lit maps), stored on the
+   match as `map`/`mapStrategy`. A mode without maps gets none.
+2. The worker pushes StartMatch on `match.host.<gs>.start` with `map_address`
+   and `wait_for_ready=true`. A server that answers `signals_ready` gets the
+   match PREPARING: the server is recorded on the match, nobody is routed yet.
+   An older server (no `signals_ready`) is assigned at once, as before.
+3. The server loads the round and calls `POST /v1/match/matches/{id}/ready`
+   with `{"gameServerName", "ok", "reason"}`. `ok` assigns the players that are
+   still PREPARING (`{"routed": true}`); `ok: false`, or a match that is no
+   longer PREPARING, answers `{"routed": false}` and the server drops the round.
+   A different server's name is 409.
+4. No ready within `MATCH_PREPARE_TIMEOUT_MS` (20 s): the players go back on the
+   queue with their original wait, and the server gets
+   `{"matchId", "reason": "timeout"}` on `match.host.<gs>.cancel`.
+
+A PREPARING ticket can still be withdrawn (`DELETE /v1/match/tickets/{id}`). If
+that leaves the match below the mode's `minPlayers`, the match fails, the rest
+are requeued and the server gets a cancel with reason `cancelled`; otherwise it
+goes ahead without the leaver.
+
+Map pools: a mode registered with `"maps": {"namespace": "survivalgames"}`
+plays every map pinned under `survivalgames/` in
+`${MAPS_CDN_BASE}/pins/${MAPS_ENVIRONMENT}.json`. `GET
+/v1/match/modes/{id}/maps` lists them, and a ticket may ask for one with
+`"map"` on `POST /v1/match/tickets`; it is then only matched with tickets that
+asked for the same map or for none.
+
+PREPARING only appears once a game server answers `signals_ready`. An older
+service-match replica cannot read such a ticket, so roll service-match out
+fully before game servers that signal readiness go live.
+
 ## Asynchronous results (regional runtime + core writer)
 
 With `MATCH_RESULT_ASYNC=true`, `POST …/matches/{id}/result` checks the
