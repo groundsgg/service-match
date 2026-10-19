@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.9.0](https://github.com/groundsgg/service-match/compare/v1.8.1...v1.9.0) (2026-10-19)
+
+
+### Features
+
+* **match:** PREPARING state, round-ready signal and map selection ([#90](https://github.com/groundsgg/service-match/issues/90)) ([58f2528](https://github.com/groundsgg/service-match/commit/58f2528634506b7fb121c70a7142447ba8a1532e))
+
 ## [1.8.1](https://github.com/groundsgg/service-match/compare/v1.8.0...v1.8.1) (2026-10-18)
 
 
