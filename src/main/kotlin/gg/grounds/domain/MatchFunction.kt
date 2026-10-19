@@ -153,6 +153,44 @@ class BandedMmrMatchFunction : MatchFunction {
         maxOf(0, now.epochSecond - ticket.enqueuedAt.epochSecond)
 }
 
+/**
+ * Keeps map requests apart: a ticket that asked for a map only plays with tickets that asked for
+ * the same map or for none, and the match then plays that map.
+ *
+ * It does so by partitioning rather than by teaching [delegate] about maps, so the rating and
+ * banding rules stay exactly what they are. For each requested map — the one the longest-waiting
+ * requester asked for first — [delegate] runs over that map's tickets plus every "any" ticket not
+ * yet proposed; only proposals holding at least one of that map's requesters are kept, since a
+ * match of "any" tickets alone has no reason to play it. A last pass runs over the "any" tickets
+ * left. With no map requested in the snapshot this is [delegate], unchanged.
+ */
+class MapAwareMatchFunction(private val delegate: MatchFunction) : MatchFunction {
+    override fun propose(
+        mode: ModeConfig,
+        tickets: List<Ticket>,
+        now: Instant,
+    ): List<MatchProposal> {
+        val queued = tickets.filter { it.state == TicketState.QUEUED }
+        val maps = queued.filter { it.map != null }.sortedBy { it.enqueuedAt }.mapNotNull { it.map }
+        if (maps.isEmpty()) return delegate.propose(mode, tickets, now)
+
+        val byId = queued.associateBy { it.id }
+        val taken = mutableSetOf<String>()
+        val proposals = mutableListOf<MatchProposal>()
+        for (map in maps.distinct()) {
+            val pool = queued.filter { it.id !in taken && (it.map == null || it.map == map) }
+            for (proposal in delegate.propose(mode, pool, now)) {
+                if (proposal.ticketIds.none { byId[it]?.map == map }) continue
+                proposals += proposal.copy(map = map)
+                taken += proposal.ticketIds
+            }
+        }
+        val any = queued.filter { it.id !in taken && it.map == null }
+        proposals += delegate.propose(mode, any, now)
+        return proposals
+    }
+}
+
 /** Ignores ratings entirely — oldest tickets, in order. Useful in tests. */
 class FifoMatchFunction : MatchFunction {
     override fun propose(

@@ -21,6 +21,16 @@ data class EnqueueRequestBody(
     val playerId: String?,
     @get:Schema(description = "Mode within the project.", examples = ["bedwars-squads"])
     val modeId: String?,
+    @get:Schema(
+        description =
+            "The map to play, `<namespace>/<name>`, from the mode's pool (GET " +
+                "/v1/match/modes/{modeId}/maps). Omit for any map. The player is then only " +
+                "matched with players who asked for the same map or for none. 400 if the map " +
+                "is not in the pool, or the mode has no maps.",
+        nullable = true,
+        examples = ["survivalgames/aura"],
+    )
+    val map: String? = null,
 )
 
 @Schema(description = "The ticket a player now holds.")
@@ -40,8 +50,10 @@ data class EnqueueResponse(
 data class CancelTicketResponse(
     @get:Schema(
         description =
-            "False when the ticket was already past QUEUED — a match had formed — or is not " +
-                "this player's. A legitimate answer, not an error."
+            "False when the ticket is past withdrawing — its match is being allocated or its " +
+                "players have been sent — or is not this player's. A legitimate answer, not an " +
+                "error. A ticket whose match's server is still preparing the round (PREPARING) " +
+                "can be withdrawn."
     )
     val cancelled: Boolean
 )
@@ -49,7 +61,10 @@ data class CancelTicketResponse(
 @Schema(description = "Where a ticket stands.")
 data class TicketResponse(
     @get:Schema(
-        description = "QUEUED, MATCHED, ASSIGNED, CANCELLED or FAILED.",
+        description =
+            "QUEUED, MATCHED, PREPARING, ASSIGNED, CANCELLED or FAILED. PREPARING: the match " +
+                "has a server that is preparing the round; the player is not routed until it " +
+                "is ASSIGNED. A caller that does not know a state treats it as still waiting.",
         examples = ["QUEUED"],
     )
     val state: String,
@@ -235,6 +250,48 @@ data class UpsertQueueRequestBody(
     val boards: List<BoardBody>? = null,
     @get:Schema(description = "Whether a disconnected player may rejoin a running match.")
     val rejoinEnabled: Boolean = false,
+    @get:Schema(
+        description =
+            "The mode's map pool. Omit for a mode without maps: its matches are pushed with no " +
+                "map, and a ticket cannot ask for one.",
+        nullable = true,
+    )
+    val maps: MapsBody? = null,
+)
+
+@Schema(description = "Where a mode's maps come from and how one is chosen.")
+data class MapsBody(
+    @get:Schema(
+        description =
+            "Every map pinned for this environment under `<namespace>/` is in the pool. A " +
+                "namespace may itself contain a slash.",
+        required = true,
+        examples = ["survivalgames"],
+    )
+    val namespace: String?,
+    @get:Schema(
+        description =
+            "How a match's map is chosen when none of its players asked for one. RANDOM " +
+                "(default): uniformly from the pool, preferring maps that ship a pre-lit world.",
+        nullable = true,
+        examples = ["RANDOM"],
+    )
+    val selection: String? = null,
+)
+
+@Schema(description = "The maps a mode can be queued for.")
+data class ModeMapsResponse(
+    @get:Schema(
+        description = "Pinned map addresses, sorted. Empty for a mode without maps.",
+        examples = ["[\"survivalgames/aura\", \"survivalgames/breeze\"]"],
+    )
+    val maps: List<String>,
+    @get:Schema(
+        description = "How a map is chosen when a ticket asks for none; null without maps.",
+        nullable = true,
+        examples = ["RANDOM"],
+    )
+    val selection: String?,
 )
 
 @Schema(description = "A stat board a mode writes.")
@@ -378,6 +435,38 @@ data class ReportResultResponse(
 }
 
 // ---------------------------------------------------------------
+// Round readiness
+// ---------------------------------------------------------------
+
+@Schema(description = "Whether the round a server was preparing for a match is ready.")
+data class MatchReadyRequestBody(
+    @get:Schema(
+        description = "The reporting server's GameServer name; must be the match's server.",
+        required = true,
+    )
+    val gameServerName: String?,
+    @get:Schema(
+        description = "True when the round is ready for its players, false when it could not be.",
+        required = true,
+    )
+    val ok: Boolean?,
+    @get:Schema(description = "Why not, for operators. Never interpreted.", nullable = true)
+    val reason: String? = null,
+)
+
+@Schema(description = "Whether the match's players are being sent to the server.")
+data class MatchReadyResponse(
+    @get:Schema(
+        description =
+            "True: the players are routed (also on a retry after that). False: the match is " +
+                "no longer waiting for this server — it timed out, failed, too many players " +
+                "left, or the server reported it could not prepare — and the server should " +
+                "discard the round."
+    )
+    val routed: Boolean
+)
+
+// ---------------------------------------------------------------
 // Errors
 // ---------------------------------------------------------------
 
@@ -388,7 +477,8 @@ data class ProblemDetails(
     val detail: String?,
     @get:Schema(
         description = "Stable machine-readable code.",
-        examples = ["ticket_exists", "unknown_mode", "unknown_match", "not_in_match"],
+        examples =
+            ["ticket_exists", "unknown_mode", "unknown_match", "not_in_match", "wrong_server"],
     )
     val code: String,
 )

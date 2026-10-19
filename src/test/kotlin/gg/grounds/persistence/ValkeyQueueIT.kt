@@ -1,5 +1,6 @@
 package gg.grounds.persistence
 
+import gg.grounds.domain.MatchState
 import gg.grounds.domain.MatchTimeline
 import gg.grounds.domain.ServerAssignment
 import gg.grounds.domain.Ticket
@@ -488,6 +489,227 @@ class ValkeyQueueIT {
         queue.clearActive("p1")
 
         assertNull(queue.activeTicket("p1"))
+    }
+
+    // -----------------------------------------------------------
+    // PREPARING: the server has the match and is preparing the round
+    // -----------------------------------------------------------
+
+    private val server = ServerAssignment("sg-abc12", "10.0.0.9", 25565)
+
+    /** [players] queued with the given waits, claimed into one free-for-all and PREPARING. */
+    private fun preparing(vararg players: Pair<String, Long>): Pair<String, List<Ticket>> {
+        val tickets = players.map { (player, waited) -> ticket(player, waitedSeconds = waited) }
+        tickets.forEach { assertTrue(queue.enqueue(it, TTL)) }
+        val matchId = UUID.randomUUID().toString()
+        assertTrue(queue.claim(matchId, "duel", tickets.map { it.id }, 1, Instant.now(), TTL))
+        assertTrue(queue.prepare(matchId, server, Instant.now()))
+        return matchId to tickets
+    }
+
+    private fun isPreparing(matchId: String): Boolean =
+        redis.execute("ZSCORE", ValkeyQueue.PREPARING_MATCHES, matchId) != null
+
+    @Test
+    fun `a preparing match routes nobody yet and keeps every guard`() {
+        val (matchId, tickets) = preparing("p1" to 0L, "p2" to 0L)
+
+        val t = queue.findTicket(tickets[0].id)!!
+        assertEquals(TicketState.PREPARING, t.state)
+        assertNull(t.assignment, "a ticket carries a server only once it is ASSIGNED")
+        assertNull(queue.activeTicket("p1"))
+        assertFalse(queue.enqueue(ticket("p1"), TTL), "still the player's one live ticket")
+
+        val status = queue.matchStatus(matchId)
+        assertEquals(MatchState.PREPARING, status.state)
+        assertEquals(server, status.server)
+        assertNotNull(status.preparingAt)
+        assertTrue(isLive(matchId), "still watched until it is assigned")
+        assertTrue(isPreparing(matchId))
+        assertEquals(1, queue.preparingCount())
+    }
+
+    @Test
+    fun `only a formed match starts preparing`() {
+        val (matchId, _) = preparing("p1" to 0L, "p2" to 0L)
+
+        assertFalse(queue.prepare(matchId, server, Instant.now()), "already PREPARING")
+        queue.failRequeue(matchId, "duel")
+        assertFalse(queue.prepare(matchId, server, Instant.now()), "failed while in flight")
+    }
+
+    @Test
+    fun `ready assigns a preparing match`() {
+        val (matchId, tickets) = preparing("p1" to 0L, "p2" to 0L)
+
+        assertTrue(queue.assign(matchId, server, MatchState.PREPARING))
+
+        val t = queue.findTicket(tickets[0].id)!!
+        assertEquals(TicketState.ASSIGNED, t.state)
+        assertEquals(server, t.assignment)
+        assertEquals(tickets[0].id, queue.activeTicket("p1")?.id)
+        assertEquals(MatchState.ASSIGNED, queue.matchStatus(matchId).state)
+        assertFalse(isLive(matchId))
+        assertFalse(isPreparing(matchId))
+        assertTrue(queue.enqueue(ticket("p1"), TTL), "the guard is released at assignment")
+    }
+
+    @Test
+    fun `ready on a match that is not preparing assigns nothing`() {
+        // Still FORMED: the server never said it would prepare.
+        val a = ticket("p1")
+        val b = ticket("p2")
+        queue.enqueue(a, TTL)
+        queue.enqueue(b, TTL)
+        val formed = UUID.randomUUID().toString()
+        queue.claim(formed, "duel", listOf(a.id, b.id), 1, Instant.now(), TTL)
+        assertFalse(queue.assign(formed, server, MatchState.PREPARING))
+        assertEquals(TicketState.MATCHED, queue.findTicket(a.id)?.state)
+
+        // Failed while preparing: its players are back in the queue and must stay there.
+        val (failed, tickets) = preparing("p3" to 0L, "p4" to 0L)
+        queue.failRequeue(failed, "duel", MatchState.PREPARING)
+        assertFalse(queue.assign(failed, server, MatchState.PREPARING))
+        assertEquals(TicketState.QUEUED, queue.findTicket(tickets[0].id)?.state)
+    }
+
+    @Test
+    fun `a failed preparation requeues with the original wait, once`() {
+        val (matchId, tickets) = preparing("p1" to 300L, "p2" to 10L)
+        val enqueuedAt = queue.findTicket(tickets[0].id)!!.enqueuedAt
+
+        assertEquals(2, queue.failRequeue(matchId, "duel", MatchState.PREPARING))
+
+        val requeued = queue.findTicket(tickets[0].id)!!
+        assertEquals(TicketState.QUEUED, requeued.state)
+        assertNull(requeued.matchId)
+        assertEquals(enqueuedAt.toEpochMilli(), requeued.enqueuedAt.toEpochMilli())
+        assertEquals(
+            enqueuedAt.toEpochMilli().toDouble(),
+            redis
+                .execute("ZSCORE", ValkeyQueue.waitKey("duel"), tickets[0].id)
+                .toString()
+                .toDouble(),
+        )
+        assertEquals(2, queue.queueDepth("duel"))
+        assertFalse(isLive(matchId))
+        assertFalse(isPreparing(matchId))
+        assertEquals(
+            -1,
+            queue.failRequeue(matchId, "duel", MatchState.PREPARING),
+            "a second sweep finds it already failed",
+        )
+    }
+
+    @Test
+    fun `a match whose mode is gone cancels its preparing tickets`() {
+        val (matchId, tickets) = preparing("p1" to 0L, "p2" to 0L)
+
+        assertEquals(2, queue.failCancel(matchId))
+
+        assertEquals(TicketState.CANCELLED, queue.findTicket(tickets[0].id)?.state)
+        assertFalse(isPreparing(matchId))
+        assertTrue(queue.enqueue(ticket("p1"), TTL))
+    }
+
+    @Test
+    fun `leaving a preparing match that still has enough players lets it go ahead`() {
+        val (matchId, tickets) = preparing("p1" to 0L, "p2" to 0L, "p3" to 0L)
+
+        assertEquals(Withdrawal.CANCELLED, queue.withdraw(tickets[0].id, "p1", "duel", 2))
+
+        assertEquals(TicketState.CANCELLED, queue.findTicket(tickets[0].id)?.state)
+        assertTrue(queue.enqueue(ticket("p1"), TTL), "the leaver may queue again at once")
+        assertEquals(MatchState.PREPARING, queue.matchStatus(matchId).state)
+
+        // Ready routes the two who stayed, and not the one who left.
+        assertTrue(queue.assign(matchId, server, MatchState.PREPARING))
+        assertEquals(TicketState.CANCELLED, queue.findTicket(tickets[0].id)?.state)
+        assertEquals(TicketState.ASSIGNED, queue.findTicket(tickets[1].id)?.state)
+        assertEquals(TicketState.ASSIGNED, queue.findTicket(tickets[2].id)?.state)
+        assertNull(queue.activeTicket("p1"))
+    }
+
+    @Test
+    fun `leaving a preparing match below its minimum requeues the rest`() {
+        val (matchId, tickets) = preparing("p1" to 0L, "p2" to 120L)
+        val enqueuedAt = queue.findTicket(tickets[1].id)!!.enqueuedAt
+
+        assertEquals(
+            Withdrawal.CANCELLED_MATCH_FAILED,
+            queue.withdraw(tickets[0].id, "p1", "duel", 2),
+        )
+
+        assertEquals(TicketState.CANCELLED, queue.findTicket(tickets[0].id)?.state)
+        val stayed = queue.findTicket(tickets[1].id)!!
+        assertEquals(TicketState.QUEUED, stayed.state)
+        assertEquals(enqueuedAt.toEpochMilli(), stayed.enqueuedAt.toEpochMilli())
+        assertEquals(1, queue.queueDepth("duel"))
+        assertFalse(queue.enqueue(ticket("p2"), TTL), "p2 keeps their one live ticket")
+        assertEquals(MatchState.FAILED, queue.matchStatus(matchId).state)
+        assertFalse(isLive(matchId))
+        assertFalse(isPreparing(matchId))
+    }
+
+    @Test
+    fun `a matched ticket still cannot be withdrawn`() {
+        val a = ticket("p1")
+        val b = ticket("p2")
+        queue.enqueue(a, TTL)
+        queue.enqueue(b, TTL)
+        queue.claim(UUID.randomUUID().toString(), "duel", listOf(a.id, b.id), 1, Instant.now(), TTL)
+
+        assertEquals(Withdrawal.REFUSED, queue.withdraw(a.id, "p1", "duel", 1))
+        assertEquals(TicketState.MATCHED, queue.findTicket(a.id)?.state)
+    }
+
+    @Test
+    fun `the prepare worklist lists matches by when they started preparing`() {
+        val (old, _) = preparing("p1" to 0L, "p2" to 0L)
+        redis.execute("ZADD", ValkeyQueue.PREPARING_MATCHES, "1000", old)
+        val (young, _) = preparing("p3" to 0L, "p4" to 0L)
+
+        assertEquals(listOf(old), queue.preparingSince(Instant.ofEpochMilli(5000)))
+        assertEquals(listOf(old, young), queue.preparingSince(Instant.now().plusSeconds(1)))
+        queue.forgetPreparing(old)
+        assertEquals(1, queue.preparingCount())
+    }
+
+    // -----------------------------------------------------------
+    // Map requests and the chosen map
+    // -----------------------------------------------------------
+
+    @Test
+    fun `a ticket keeps the map it asked for`() {
+        val asked = ticket("p1").copy(map = "survivalgames/aura")
+        val any = ticket("p2")
+        queue.enqueue(asked, TTL)
+        queue.enqueue(any, TTL)
+
+        assertEquals("survivalgames/aura", queue.findTicket(asked.id)?.map)
+        assertNull(queue.findTicket(any.id)?.map)
+
+        val matchId = UUID.randomUUID().toString()
+        queue.claim(matchId, "duel", listOf(any.id, asked.id), 1, Instant.now(), TTL)
+        assertEquals("survivalgames/aura", queue.requestedMap(matchId))
+    }
+
+    @Test
+    fun `a match nobody asked a map for has no requested map`() {
+        val a = ticket("p1")
+        val b = ticket("p2")
+        queue.enqueue(a, TTL)
+        queue.enqueue(b, TTL)
+        val matchId = UUID.randomUUID().toString()
+        queue.claim(matchId, "duel", listOf(a.id, b.id), 1, Instant.now(), TTL)
+
+        assertNull(queue.requestedMap(matchId))
+        assertNull(queue.chosenMap(matchId), "nothing chosen yet")
+
+        queue.storeMap(matchId, "", "NONE")
+        assertEquals("", queue.chosenMap(matchId), "chosen: no map")
+        queue.storeMap(matchId, "duel/arena", "RANDOM")
+        assertEquals("duel/arena", queue.chosenMap(matchId))
     }
 
     private fun isLive(matchId: String): Boolean =

@@ -3,6 +3,7 @@ package gg.grounds.allocator
 import gg.grounds.MatchRole
 import gg.grounds.domain.MatchTimeline
 import gg.grounds.domain.ServerAssignment
+import gg.grounds.maps.MapSelection
 import gg.grounds.matcher.ModeRegistry
 import gg.grounds.metrics.MatchMetrics
 import gg.grounds.persistence.Matchmaker
@@ -40,6 +41,7 @@ constructor(
     private val agones: AgonesAllocator,
     private val matchHost: MatchHostClient,
     private val modes: ModeRegistry,
+    private val mapSelection: MapSelection,
     private val metrics: MatchMetrics,
     private val tracing: MatchTracing,
     @param:ConfigProperty(name = "grounds.match.alloc.lease-ms") private val leaseMs: Long,
@@ -191,6 +193,8 @@ constructor(
             return "gave_up"
         }
 
+        val mapAddress = chooseMap(matchId, modeId)
+
         val fleet = mode.fleet
         val allocateSpan =
             tracing.child("allocate", timeline.traceparent, timeline.formedAt ?: Instant.now())
@@ -228,7 +232,7 @@ constructor(
         val teams = queue.matchTeams(matchId)
         val pushSpan = tracing.child("push", timeline.traceparent, Instant.now())
         val pushStarted = System.nanoTime()
-        val pushed =
+        val reply =
             try {
                 matchHost.startMatch(
                     server,
@@ -238,10 +242,13 @@ constructor(
                     enqueuedAt = timeline.enqueuedAt,
                     formedAt = timeline.formedAt,
                     traceparent = tracing.traceparent(pushSpan),
+                    mapAddress = mapAddress,
+                    waitForReady = true,
                 )
             } finally {
                 pushSpan.end()
             }
+        val pushed = reply.accepted
         val pushTook = Duration.ofNanos(System.nanoTime() - pushStarted)
         metrics.timeToPush(modeId, if (pushed) "ok" else "failed", pushTook)
         log.info(
@@ -259,6 +266,10 @@ constructor(
             queue.failRequeue(matchId, modeId)
             ack(entryId)
             return "server_refused"
+        }
+
+        if (reply.signalsReady) {
+            return prepare(matchId, modeId, server, timeline, allocatedAt, pushTook, entryId)
         }
 
         val won = queue.assign(matchId, server)
@@ -283,6 +294,61 @@ constructor(
     }
 
     /**
+     * The server took the match and will report the round ready itself. The players stay in the
+     * queue, PREPARING, until it does (`POST /v1/match/matches/{id}/ready`) — sent now, they would
+     * land in a round still loading its map. A server that never reports is the watchdog's: after
+     * the prepare timeout the players go back on the queue and the server is told to drop the
+     * round.
+     */
+    private fun prepare(
+        matchId: String,
+        modeId: String,
+        server: ServerAssignment,
+        timeline: MatchTimeline,
+        allocatedAt: Instant,
+        pushTook: Duration,
+        entryId: String,
+    ): String {
+        if (!queue.prepare(matchId, server, Instant.now())) {
+            // The match stopped being FORMED while the push was in flight — the watchdog failed
+            // it. The server is preparing a round nobody will come to.
+            log.warn(
+                "Match was no longer FORMED once the server accepted it; telling " +
+                    "${server.gameServerName} to drop the round (id=$matchId)"
+            )
+            matchHost.cancelMatch(server.gameServerName, matchId, "cancelled")
+            ack(entryId)
+            return "lost_race"
+        }
+        log.info(
+            timelineLine(matchId, modeId, server, timeline, allocatedAt, pushTook, "preparing")
+        )
+        ack(entryId)
+        return "preparing"
+    }
+
+    /**
+     * The map the match plays, chosen once and stored on the match so a retried allocation pushes
+     * the same one: a map a ticket asked for, else the mode's selection over its pinned pool. ""
+     * for a mode without maps — the push then carries no map, exactly as before maps existed.
+     */
+    private fun chooseMap(matchId: String, modeId: String): String {
+        queue.chosenMap(matchId)?.let {
+            return it
+        }
+        val choice =
+            mapSelection.choose(modeId, queue.loadMeta(modeId).maps, queue.requestedMap(matchId))
+        queue.storeMap(matchId, choice.address, choice.strategy)
+        if (choice.address.isNotEmpty()) {
+            log.info(
+                "Chose map (match=$matchId, mode=$modeId, map=${choice.address}, " +
+                    "strategy=${choice.strategy})"
+            )
+        }
+        return choice.address
+    }
+
+    /**
      * Where this match's seconds went before its players were routed, one line per match, greppable
      * by `match=<id>`. A phase that cannot be told — a match formed before the timeline was stored
      * has no enqueue times — is left out rather than guessed.
@@ -294,6 +360,7 @@ constructor(
         timeline: MatchTimeline,
         allocatedAt: Instant,
         pushTook: Duration,
+        stage: String = "assigned",
     ): String {
         val formedAt = timeline.formedAt
         val oldest = timeline.enqueuedAt.values.minOrNull()
@@ -307,7 +374,7 @@ constructor(
             add("pushMs=${pushTook.toMillis()}")
             if (oldest != null) add("totalMs=${Duration.between(oldest, Instant.now()).toMillis()}")
         }
-        return "Match timeline (match=$matchId, mode=$modeId, stage=assigned, " +
+        return "Match timeline (match=$matchId, mode=$modeId, stage=$stage, " +
             "gs=${server.gameServerName}, ${phases.joinToString(", ")})"
     }
 

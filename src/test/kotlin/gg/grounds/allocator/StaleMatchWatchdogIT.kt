@@ -6,6 +6,7 @@ import gg.grounds.domain.TicketState
 import gg.grounds.persistence.ValkeyQueue
 import gg.grounds.persistence.ValkeyQueueIT
 import io.quarkus.redis.datasource.RedisDataSource
+import io.quarkus.test.InjectMock
 import io.quarkus.test.common.QuarkusTestResource
 import io.quarkus.test.junit.QuarkusTest
 import jakarta.inject.Inject
@@ -16,6 +17,9 @@ import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import org.mockito.kotlin.any
+import org.mockito.kotlin.never
+import org.mockito.kotlin.verify
 
 /**
  * The watchdog against a real Valkey.
@@ -39,6 +43,9 @@ class StaleMatchWatchdogIT {
     @Inject lateinit var queue: ValkeyQueue
 
     @Inject lateinit var redis: RedisDataSource
+
+    // The prepare timeout tells the server to drop its round; no broker is dialled from a test.
+    @InjectMock lateinit var matchHost: MatchHostClient
 
     @BeforeEach
     fun clean() {
@@ -128,6 +135,68 @@ class StaleMatchWatchdogIT {
         assertFalse(isLive(matchId))
     }
 
+    @Test
+    fun `a server that never reports the round ready loses the match`() {
+        val (a, b) = twoQueuedPlayers()
+        val enqueuedAt = queue.findTicket(a.id)!!.enqueuedAt
+        val matchId = claim(a, b, at = Instant.now())
+        queue.prepare(matchId, SERVER, Instant.now().minusSeconds(60))
+
+        watchdog.sweepPreparing()
+
+        assertEquals(TicketState.QUEUED, queue.findTicket(a.id)?.state)
+        assertEquals(TicketState.QUEUED, queue.findTicket(b.id)?.state)
+        assertEquals(enqueuedAt.toEpochMilli(), queue.findTicket(a.id)!!.enqueuedAt.toEpochMilli())
+        assertEquals(2, queue.queueDepth("duel"))
+        assertFalse(isLive(matchId))
+        assertEquals(0, queue.preparingCount())
+        verify(matchHost).cancelMatch(SERVER.gameServerName, matchId, "timeout")
+    }
+
+    @Test
+    fun `a round still within the prepare timeout is left to its server`() {
+        val (a, b) = twoQueuedPlayers()
+        val matchId = claim(a, b, at = Instant.now())
+        queue.prepare(matchId, SERVER, Instant.now())
+
+        watchdog.sweepPreparing()
+
+        assertEquals(TicketState.PREPARING, queue.findTicket(a.id)?.state)
+        assertTrue(isLive(matchId))
+        assertEquals(1, queue.preparingCount())
+        verify(matchHost, never()).cancelMatch(any(), any(), any())
+    }
+
+    @Test
+    fun `the formed-match sweep leaves a preparing match on the worklist`() {
+        // Formed an hour ago, so the 30 s sweep would call it stale — but its server has it now
+        // and the prepare timeout is the clock that applies.
+        val (a, b) = twoQueuedPlayers()
+        val matchId = claim(a, b, at = longAgo())
+        queue.prepare(matchId, SERVER, Instant.now())
+
+        watchdog.sweep()
+
+        assertEquals(TicketState.PREPARING, queue.findTicket(a.id)?.state)
+        assertTrue(isLive(matchId))
+    }
+
+    @Test
+    fun `an assigned match is dropped from the prepare worklist without a cancel`() {
+        val (a, b) = twoQueuedPlayers()
+        val matchId = claim(a, b, at = Instant.now())
+        queue.prepare(matchId, SERVER, Instant.now().minusSeconds(60))
+        queue.assign(matchId, SERVER, gg.grounds.domain.MatchState.PREPARING)
+        // Assign clears it; force it back to exercise the sweep's own guard.
+        redis.execute("ZADD", ValkeyQueue.PREPARING_MATCHES, "1", matchId)
+
+        watchdog.sweepPreparing()
+
+        assertEquals(TicketState.ASSIGNED, queue.findTicket(a.id)?.state)
+        assertEquals(0, queue.preparingCount())
+        verify(matchHost, never()).cancelMatch(any(), any(), any())
+    }
+
     private fun twoQueuedPlayers(): Pair<Ticket, Ticket> {
         val a = ticket("p1")
         val b = ticket("p2")
@@ -160,5 +229,6 @@ class StaleMatchWatchdogIT {
 
     companion object {
         private const val TTL = 3600L
+        private val SERVER = ServerAssignment("sg-abc12", "10.0.0.9", 25565)
     }
 }

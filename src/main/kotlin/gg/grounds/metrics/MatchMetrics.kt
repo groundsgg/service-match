@@ -7,6 +7,7 @@ import jakarta.enterprise.context.ApplicationScoped
 import jakarta.inject.Inject
 import java.time.Duration
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * Matchmaking metrics, in one place.
@@ -36,6 +37,9 @@ class MatchMetrics @Inject constructor(private val registry: MeterRegistry) {
      * alive.
      */
     private val depthSuppliers = ConcurrentHashMap<String, () -> Long>()
+
+    /** The PREPARING count's supplier, held for the same reason as [depthSuppliers]. */
+    private val preparingSupplier = AtomicReference<() -> Long>()
 
     /** A ticket joined the queue. */
     fun ticketEnqueued(mode: String) {
@@ -91,6 +95,16 @@ class MatchMetrics @Inject constructor(private val registry: MeterRegistry) {
         timeline("grounds.match.time.to.push", took, "mode", mode, "result", result)
     }
 
+    /**
+     * A server's round preparation: from the server accepting the match (it answered
+     * `signals_ready`) to the outcome — `ok` (it reported ready and the players were routed),
+     * `failed` (it reported it could not), `timeout` (it never reported) or `cancelled` (too many
+     * players left the queue meanwhile).
+     */
+    fun timeToReady(mode: String, result: String, took: Duration) {
+        timeline("grounds.match.time.to.ready", took, "mode", mode, "result", result)
+    }
+
     private fun timeline(name: String, took: Duration, vararg tags: String) {
         Timer.builder(name)
             .tags(*tags)
@@ -115,9 +129,9 @@ class MatchMetrics @Inject constructor(private val registry: MeterRegistry) {
 
     /**
      * Time one allocation attempt and record its outcome. `result` is the branch it took —
-     * `assigned`, `no_server`, `server_refused`, `unknown_mode`, `gave_up`, `lost_race`, `error` —
-     * so a rise in "formed but never started" points at which failure caused it rather than just
-     * that it happened.
+     * `assigned`, `preparing`, `no_server`, `server_refused`, `unknown_mode`, `gave_up`,
+     * `lost_race`, `error` — so a rise in "formed but never started" points at which failure caused
+     * it rather than just that it happened.
      */
     fun timeAllocation(mode: String, attempt: () -> String) {
         val sample = Timer.start(registry)
@@ -141,6 +155,21 @@ class MatchMetrics @Inject constructor(private val registry: MeterRegistry) {
                     (it[mode]?.invoke() ?: 0L).toDouble()
                 }
                 .tag("mode", mode)
+                .register(registry)
+        }
+    }
+
+    /**
+     * Publish how many matches are PREPARING right now, once. Not per mode: the count is one
+     * `ZCARD` of the prepare worklist at scrape time, where a per-mode split would need a read of
+     * every match on it. `time.to.ready` carries the mode.
+     */
+    fun ensurePreparingGauge(count: () -> Long) {
+        if (preparingSupplier.compareAndSet(null, count)) {
+            Gauge.builder("grounds.match.preparing", preparingSupplier) {
+                    (it.get()?.invoke() ?: 0L).toDouble()
+                }
+                .description("Matches whose server is preparing the round")
                 .register(registry)
         }
     }

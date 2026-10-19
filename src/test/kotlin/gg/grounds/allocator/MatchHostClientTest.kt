@@ -41,7 +41,7 @@ class MatchHostClientTest {
             )
             .thenReturn(reply(accepted = true))
 
-        assertTrue(client().startMatch(SERVER, MATCH, MODE, TEAMS))
+        assertTrue(client().startMatch(SERVER, MATCH, MODE, TEAMS).accepted)
     }
 
     @Test
@@ -133,7 +133,7 @@ class MatchHostClientTest {
             )
             .thenReturn(reply(accepted = true))
 
-        assertTrue(client().startMatch(SERVER, MATCH, MODE, TEAMS))
+        assertTrue(client().startMatch(SERVER, MATCH, MODE, TEAMS).accepted)
 
         assertTrue(sentHeaders().isEmpty)
     }
@@ -146,7 +146,7 @@ class MatchHostClientTest {
             )
             .thenReturn(reply(accepted = false, reason = "shutting down"))
 
-        assertFalse(client().startMatch(SERVER, MATCH, MODE, TEAMS))
+        assertFalse(client().startMatch(SERVER, MATCH, MODE, TEAMS).accepted)
     }
 
     @Test
@@ -159,7 +159,7 @@ class MatchHostClientTest {
             )
             .thenReturn(null)
 
-        assertFalse(client().startMatch(SERVER, MATCH, MODE, TEAMS))
+        assertFalse(client().startMatch(SERVER, MATCH, MODE, TEAMS).accepted)
         verify(connection).request(any<String>(), any<Headers>(), any<ByteArray>(), any<Duration>())
     }
 
@@ -167,13 +167,15 @@ class MatchHostClientTest {
     fun `a broker that is down means no match`() {
         whenever(connector.connection()).thenReturn(null)
 
-        assertFalse(client().startMatch(SERVER, MATCH, MODE, TEAMS))
+        assertFalse(client().startMatch(SERVER, MATCH, MODE, TEAMS).accepted)
     }
 
     @Test
     fun `an empty match is refused before anything is sent`() {
-        assertFalse(client().startMatch(SERVER, MATCH, MODE, emptyList()))
-        assertFalse(client().startMatch(SERVER, MATCH, MODE, listOf(emptyList(), emptyList())))
+        assertFalse(client().startMatch(SERVER, MATCH, MODE, emptyList()).accepted)
+        assertFalse(
+            client().startMatch(SERVER, MATCH, MODE, listOf(emptyList(), emptyList())).accepted
+        )
 
         verify(connector, never()).connection()
     }
@@ -191,7 +193,105 @@ class MatchHostClientTest {
             )
             .thenReturn(garbage)
 
-        assertFalse(client().startMatch(SERVER, MATCH, MODE, TEAMS))
+        assertFalse(client().startMatch(SERVER, MATCH, MODE, TEAMS).accepted)
+    }
+
+    @Test
+    fun `the push carries the chosen map and asks the server to report ready`() {
+        givenConnected()
+        whenever(
+                connection.request(any<String>(), any<Headers>(), any<ByteArray>(), any<Duration>())
+            )
+            .thenReturn(reply(accepted = true))
+
+        client().startMatch(SERVER, MATCH, MODE, TEAMS, mapAddress = "survivalgames/aura")
+
+        val sent = sentRequest()
+        assertEquals("survivalgames/aura", sent.mapAddress)
+        assertTrue(sent.waitForReady)
+    }
+
+    @Test
+    fun `a mode without maps pushes an empty map address`() {
+        givenConnected()
+        whenever(
+                connection.request(any<String>(), any<Headers>(), any<ByteArray>(), any<Duration>())
+            )
+            .thenReturn(reply(accepted = true))
+
+        client().startMatch(SERVER, MATCH, MODE, TEAMS)
+
+        assertEquals("", sentRequest().mapAddress)
+    }
+
+    @Test
+    fun `a server that will report ready says so`() {
+        givenConnected()
+        whenever(
+                connection.request(any<String>(), any<Headers>(), any<ByteArray>(), any<Duration>())
+            )
+            .thenReturn(reply(accepted = true, signalsReady = true))
+
+        assertEquals(
+            StartMatchResult(accepted = true, signalsReady = true),
+            client().startMatch(SERVER, MATCH, MODE, TEAMS),
+        )
+    }
+
+    @Test
+    fun `an older server that never signals is ready when it accepts`() {
+        // Its reply has no signals_ready at all: the players are routed at once, as before.
+        givenConnected()
+        whenever(
+                connection.request(any<String>(), any<Headers>(), any<ByteArray>(), any<Duration>())
+            )
+            .thenReturn(reply(accepted = true))
+
+        assertEquals(
+            StartMatchResult(accepted = true, signalsReady = false),
+            client().startMatch(SERVER, MATCH, MODE, TEAMS),
+        )
+    }
+
+    @Test
+    fun `a refusal never counts as preparing`() {
+        givenConnected()
+        whenever(
+                connection.request(any<String>(), any<Headers>(), any<ByteArray>(), any<Duration>())
+            )
+            .thenReturn(reply(accepted = false, signalsReady = true))
+
+        assertEquals(StartMatchResult.REFUSED, client().startMatch(SERVER, MATCH, MODE, TEAMS))
+    }
+
+    @Test
+    fun `a cancel is published to the server by name, as JSON`() {
+        givenConnected()
+
+        assertTrue(client().cancelMatch("survivalgames-abc12", MATCH, "timeout"))
+
+        val subject = argumentCaptor<String>()
+        val body = argumentCaptor<ByteArray>()
+        verify(connection).publish(subject.capture(), body.capture())
+        assertEquals("match.host.survivalgames-abc12.cancel", subject.firstValue)
+        assertEquals(
+            """{"matchId":"$MATCH","reason":"timeout"}""",
+            String(body.firstValue, Charsets.UTF_8),
+        )
+    }
+
+    @Test
+    fun `a cancel without a broker is dropped, not thrown`() {
+        whenever(connector.connection()).thenReturn(null)
+
+        assertFalse(client().cancelMatch("survivalgames-abc12", MATCH, "cancelled"))
+    }
+
+    private fun sentRequest(): StartMatchRequest {
+        val payload = argumentCaptor<ByteArray>()
+        verify(connection)
+            .request(any<String>(), any<Headers>(), payload.capture(), any<Duration>())
+        return StartMatchRequest.parseFrom(payload.firstValue)
     }
 
     private fun sentHeaders(): Headers {
@@ -213,11 +313,16 @@ class MatchHostClientTest {
      * stubbing is exactly the nesting Mockito refuses, and the message carries nothing but bytes
      * anyway.
      */
-    private fun reply(accepted: Boolean, reason: String = ""): Message =
+    private fun reply(
+        accepted: Boolean,
+        reason: String = "",
+        signalsReady: Boolean = false,
+    ): Message =
         message(
             StartMatchReply.newBuilder()
                 .setAccepted(accepted)
                 .setReason(reason)
+                .setSignalsReady(signalsReady)
                 .build()
                 .toByteArray()
         )

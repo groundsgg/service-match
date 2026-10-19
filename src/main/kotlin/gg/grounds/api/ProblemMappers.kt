@@ -47,6 +47,14 @@ class NotInMatchMapper : ExceptionMapper<NotInMatchException> {
 }
 
 @Provider
+class WrongServerMapper : ExceptionMapper<WrongServerException> {
+    override fun toResponse(exception: WrongServerException): Response =
+        // A server reporting ready for another server's match is confused about what it hosts;
+        // routing the players on its word would send them to the wrong place.
+        problem(409, "Wrong server", exception.message, "wrong_server")
+}
+
+@Provider
 class UnknownTicketMapper : ExceptionMapper<UnknownTicketException> {
     override fun toResponse(exception: UnknownTicketException): Response =
         problem(404, "Unknown ticket", exception.message, "unknown_ticket")

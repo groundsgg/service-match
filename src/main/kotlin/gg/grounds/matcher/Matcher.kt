@@ -2,6 +2,7 @@ package gg.grounds.matcher
 
 import gg.grounds.MatchRole
 import gg.grounds.domain.BandedMmrMatchFunction
+import gg.grounds.domain.MapAwareMatchFunction
 import gg.grounds.domain.MatchFunction
 import gg.grounds.domain.MatchProposal
 import gg.grounds.domain.MatchRecordRepository
@@ -44,7 +45,7 @@ constructor(
     @param:ConfigProperty(name = "grounds.match.ticket.ttl-seconds") private val ticketTtl: Long,
     @param:ConfigProperty(name = "grounds.match.match.ttl-seconds") private val matchTtl: Long,
 ) {
-    private val matchFunction: MatchFunction = BandedMmrMatchFunction()
+    private val matchFunction: MatchFunction = MapAwareMatchFunction(BandedMmrMatchFunction())
 
     @Scheduled(
         every = "{grounds.match.tick}",
@@ -131,7 +132,8 @@ constructor(
                 recordDurably(proposal, mode, tickets)
                 log.info(
                     "Formed match (id=${proposal.matchId}, mode=${mode.modeId}, " +
-                        "players=${proposal.ticketIds.size}, spread=${"%.2f".format(proposal.quality)})"
+                        "players=${proposal.ticketIds.size}, spread=${"%.2f".format(proposal.quality)}" +
+                        (proposal.map?.let { ", map=$it)" } ?: ")")
                 )
             } else {
                 // Someone else took a ticket, or a player cancelled. The next

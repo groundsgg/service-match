@@ -84,6 +84,17 @@ class WorkloadAuthFilterTest {
     }
 
     @Test
+    fun `a ready report needs the same workload token as a result`() {
+        for (path in listOf("v1/match/matches/$MATCH/ready", "v1/match/matches/$MATCH/result")) {
+            val request = request(path, authorization = null)
+
+            filter().filter(request)
+
+            assertEquals(401, abortedStatus(request))
+        }
+    }
+
+    @Test
     fun `metrics and probes are left alone`() {
         // Alloy scrapes /q/metrics on this very port with no token, and the kubelet
         // probes /q/health. A 401 on either takes the queue dashboards — or the pod —
@@ -125,5 +136,9 @@ class WorkloadAuthFilterTest {
         val captor = argumentCaptor<Response>()
         verify(request).abortWith(captor.capture())
         return captor.firstValue.status
+    }
+
+    private companion object {
+        private const val MATCH = "6f1d2b3c-0000-4000-8000-000000000001"
     }
 }

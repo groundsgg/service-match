@@ -7,6 +7,7 @@
 --
 -- KEYS[1] = mm:match:{matchId}
 -- KEYS[2] = mm:matches:live
+-- KEYS[3] = mm:matches:preparing
 
 local matchKey = KEYS[1]
 local liveSet  = KEYS[2]
@@ -23,7 +24,8 @@ local ticketsCsv = redis.call('HGET', matchKey, 'tickets')
 if ticketsCsv then
   for id in string.gmatch(ticketsCsv, '([^,]+)') do
     local ticketKey = 'mm:ticket:' .. id
-    if redis.call('HGET', ticketKey, 'state') == 'MATCHED'
+    local tState = redis.call('HGET', ticketKey, 'state')
+    if (tState == 'MATCHED' or tState == 'PREPARING')
         and redis.call('HGET', ticketKey, 'matchId') == ARGV[1] then
       redis.call('HSET', ticketKey, 'state', 'CANCELLED')
       redis.call('HDEL', ticketKey, 'matchId')
@@ -42,5 +44,6 @@ end
 
 redis.call('HSET', matchKey, 'state', 'FAILED')
 redis.call('SREM', liveSet, ARGV[1])
+redis.call('ZREM', KEYS[3], ARGV[1])
 
 return cancelled
