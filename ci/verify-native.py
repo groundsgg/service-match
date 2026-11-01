@@ -46,7 +46,14 @@ def main():
         docker('run', '-d', '--name', valkey, '--network', network, 'valkey/valkey:8-alpine')
         docker('run', '-d', '--name', nats, '--network', network, '-p', '127.0.0.1::4222', 'nats:2-alpine', '-js')
         nats_port = docker('port', nats, '4222/tcp').rsplit(':', 1)[1]
-        nats_request(nats_port, '$JS.API.STREAM.CREATE.MATCH_RESULTS', {'name': 'MATCH_RESULTS', 'subjects': ['match.result.submitted.>'], 'storage': 'memory'})
+        for _ in range(30):
+            try:
+                nats_request(nats_port, '$JS.API.STREAM.CREATE.MATCH_RESULTS', {'name': 'MATCH_RESULTS', 'subjects': ['match.result.submitted.>'], 'storage': 'memory'})
+                break
+            except OSError:
+                time.sleep(1)
+        else:
+            raise AssertionError('NATS did not start')
         for _ in range(90):
             if subprocess.run(['docker', 'exec', db, 'pg_isready', '-U', 'app'], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:
                 break
