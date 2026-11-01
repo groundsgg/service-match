@@ -20,7 +20,7 @@ permissions:
 
 jobs:
   native:
-    uses: groundsgg/.github/.github/workflows/native-gradle-build-push.yml@90644b9eaf9c7ae6fcc3d8af87854e2822f1d320
+    uses: groundsgg/.github/.github/workflows/native-gradle-build-push.yml@ef77655dc378b9d509a7f7cf320c204ab098eee5
     with:
       verify-command: python3 ci/verify-native.py
     secrets: inherit

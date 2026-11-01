@@ -15,7 +15,7 @@ RUN --mount=type=cache,target=/root/.gradle/caches,sharing=locked \
       umask 077; \
       mkdir -p /root/.gradle; \
       trap "rm -f /root/.gradle/gradle.properties" EXIT; \
-      printf "github.token=%s\n" "$(cat /run/secrets/github_token)" > /root/.gradle/gradle.properties; \
+      printf "github.token=%s\norg.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1g\n" "$(cat /run/secrets/github_token)" > /root/.gradle/gradle.properties; \
       ./gradlew --no-daemon \
         -Pgithub.user="${GITHUB_USER}" \
         -Pkotlin.compiler.execution.strategy=in-process \
