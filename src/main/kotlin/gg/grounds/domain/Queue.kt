@@ -199,8 +199,7 @@ enum class MapSelectionStrategy {
     PICK_BAN,
 }
 
-@RegisterForReflection
-data class StatBoard(val stat: String, val displayName: String)
+@RegisterForReflection data class StatBoard(val stat: String, val displayName: String)
 
 /** One game server's claim that a mode is still being served, until [seconds] from now. */
 data class ModeLease(val leaseId: String, val seconds: Int)
