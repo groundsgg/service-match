@@ -17,8 +17,7 @@ RUN --mount=type=cache,target=/root/.gradle/caches,sharing=locked \
         -Pgithub.user="${GITHUB_USER}" -Pgithub.token="${token}" \
         -Pkotlin.compiler.execution.strategy=in-process \
         quarkusBuild -Dquarkus.native.enabled=true \
-        -Dquarkus.package.jar.enabled=false -Dquarkus.native.native-image-xmx=8g \
-        -Dquarkus.native.additional-build-args=--initialize-at-run-time=io.nats.client.support.SSLUtils; \
+        -Dquarkus.package.jar.enabled=false -Dquarkus.native.native-image-xmx=8g; \
       mkdir -p /artifacts; \
       cp build/*-runner /artifacts/application; \
       chmod 0755 /artifacts/application; \
