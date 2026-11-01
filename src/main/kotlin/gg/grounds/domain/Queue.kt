@@ -1,5 +1,6 @@
 package gg.grounds.domain
 
+import io.quarkus.runtime.annotations.RegisterForReflection
 import java.time.Instant
 
 /**
@@ -162,6 +163,7 @@ data class ModeConfig(
  * What the lobby shows for a mode, separate from how it is matched. Last writer wins: every
  * registration replaces it whole.
  */
+@RegisterForReflection
 data class ModeMeta(
     /** Null means the mode id is shown. */
     val displayName: String? = null,
@@ -179,12 +181,14 @@ data class ModeMeta(
  * A mode's map pool: every map pinned for this environment under [namespace], e.g. `survivalgames`
  * → `survivalgames/aura`, `survivalgames/breeze`.
  */
+@RegisterForReflection
 data class ModeMaps(
     val namespace: String,
     val selection: MapSelectionStrategy = MapSelectionStrategy.RANDOM,
 )
 
 /** How a match's map is chosen when none of its players asked for one. */
+@RegisterForReflection
 enum class MapSelectionStrategy {
     /** Uniformly at random from the pool, preferring maps that ship a pre-lit world. */
     RANDOM,
@@ -195,6 +199,7 @@ enum class MapSelectionStrategy {
     PICK_BAN,
 }
 
+@RegisterForReflection
 data class StatBoard(val stat: String, val displayName: String)
 
 /** One game server's claim that a mode is still being served, until [seconds] from now. */
