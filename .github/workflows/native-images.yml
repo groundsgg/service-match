@@ -4,6 +4,7 @@ on:
   pull_request:
   push:
     branches: [main]
+    tags: ["v*"]
     paths:
       - Dockerfile.native
       - build.gradle.kts
@@ -20,7 +21,7 @@ permissions:
 
 jobs:
   native:
-    uses: groundsgg/.github/.github/workflows/native-gradle-build-push.yml@ef77655dc378b9d509a7f7cf320c204ab098eee5
+    uses: groundsgg/.github/.github/workflows/native-gradle-build-push.yml@9b67831bcbeaf9e19c5f9bf07c2971df24280c0a
     with:
       verify-command: python3 ci/verify-native.py
     secrets: inherit
