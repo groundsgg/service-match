@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.10.0](https://github.com/groundsgg/service-match/compare/v1.9.0...v1.10.0) (2026-11-01)
+
+
+### Features
+
+* **match:** add portable native runtime and reusable CI ([#94](https://github.com/groundsgg/service-match/issues/94)) ([d83eae2](https://github.com/groundsgg/service-match/commit/d83eae27635ccf0651dd7ff507e73e0f51e6e3e4))
+
 ## [1.9.0](https://github.com/groundsgg/service-match/compare/v1.8.1...v1.9.0) (2026-10-19)
 
 
