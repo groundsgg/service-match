@@ -19,5 +19,5 @@ permissions:
 
 jobs:
   native:
-    uses: groundsgg/.github/.github/workflows/native-gradle-build-push.yml@878d01c2756546d5b2f96f5bd066efa8629be8f7
+    uses: groundsgg/.github/.github/workflows/native-gradle-build-push.yml@90644b9eaf9c7ae6fcc3d8af87854e2822f1d320
     secrets: inherit

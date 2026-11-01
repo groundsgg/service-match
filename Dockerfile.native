@@ -12,9 +12,12 @@ RUN --mount=type=cache,target=/root/.gradle/caches,sharing=locked \
     --mount=type=secret,id=gradle_init,target=/root/.gradle/init.d/grounds-maven-mirror.init.gradle.kts,required=false \
     /bin/sh -euc '\
       : "${GITHUB_USER:?GITHUB_USER is required}"; \
-      token="$(cat /run/secrets/github_token)"; \
+      umask 077; \
+      mkdir -p /root/.gradle; \
+      trap "rm -f /root/.gradle/gradle.properties" EXIT; \
+      printf "github.token=%s\n" "$(cat /run/secrets/github_token)" > /root/.gradle/gradle.properties; \
       ./gradlew --no-daemon \
-        -Pgithub.user="${GITHUB_USER}" -Pgithub.token="${token}" \
+        -Pgithub.user="${GITHUB_USER}" \
         -Pkotlin.compiler.execution.strategy=in-process \
         quarkusBuild -Dquarkus.native.enabled=true \
         -Dquarkus.package.jar.enabled=false -Dquarkus.native.native-image-xmx=8g; \
