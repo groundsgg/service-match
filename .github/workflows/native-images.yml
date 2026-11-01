@@ -1,0 +1,27 @@
+name: Native Images
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ["v*"]
+    paths:
+      - Dockerfile.native
+      - build.gradle.kts
+      - settings.gradle.kts
+      - gradle/**
+      - src/**
+      - ci/**
+      - .github/workflows/native-images.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  native:
+    uses: groundsgg/.github/.github/workflows/native-gradle-build-push.yml@9b67831bcbeaf9e19c5f9bf07c2971df24280c0a
+    with:
+      verify-command: python3 ci/verify-native.py
+    secrets: inherit

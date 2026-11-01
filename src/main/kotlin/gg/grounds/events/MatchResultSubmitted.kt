@@ -1,5 +1,7 @@
 package gg.grounds.events
 
+import io.quarkus.runtime.annotations.RegisterForReflection
+
 /**
  * A match result on its way from the regional runtime to the core writer.
  *
@@ -8,6 +10,7 @@ package gg.grounds.events
  * was in it), so the writer only re-checks and applies. JSON rather than a proto: both ends are
  * this service, and the body is exactly the REST request plus the ids the URL carried.
  */
+@RegisterForReflection
 data class MatchResultSubmitted(
     val matchId: String,
     val modeId: String,

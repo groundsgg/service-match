@@ -1,0 +1,56 @@
+# syntax=docker/dockerfile:1.7
+FROM quay.io/quarkus/ubi9-quarkus-mandrel-builder-image:jdk-25@sha256:6e0fe1ddc9efcf8dc1775c3016974db8d07124f805ba963495ec2bddb2d47349 AS build
+USER root
+WORKDIR /workspace
+ARG GITHUB_USER
+COPY gradle/ gradle/
+COPY gradlew build.gradle.kts settings.gradle.kts ./
+COPY src/main/ src/main/
+RUN --mount=type=cache,target=/root/.gradle/caches,sharing=locked \
+    --mount=type=cache,target=/root/.gradle/wrapper,sharing=locked \
+    --mount=type=secret,id=github_token,required=true \
+    --mount=type=secret,id=gradle_init,target=/root/.gradle/init.d/grounds-maven-mirror.init.gradle.kts,required=false \
+    /bin/sh -euc '\
+      : "${GITHUB_USER:?GITHUB_USER is required}"; \
+      umask 077; \
+      mkdir -p /root/.gradle; \
+      trap "rm -f /root/.gradle/gradle.properties" EXIT; \
+      printf "github.token=%s\norg.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1g\n" "$(cat /run/secrets/github_token)" > /root/.gradle/gradle.properties; \
+      ./gradlew --no-daemon \
+        -Pgithub.user="${GITHUB_USER}" \
+        -Pkotlin.compiler.execution.strategy=in-process \
+        quarkusBuild -Dquarkus.native.enabled=true \
+        -Dquarkus.package.jar.enabled=false -Dquarkus.native.native-image-xmx=8g; \
+      mkdir -p /artifacts; \
+      cp build/*-runner /artifacts/application; \
+      chmod 0755 /artifacts/application; \
+      cd /artifacts; sha256sum application > application.sha256; \
+      ldd /artifacts/application > dependencies.txt \
+    '
+
+FROM scratch AS native-binary
+COPY --from=build /artifacts/ /
+
+FROM quay.io/quarkus/ubi9-quarkus-micro-image:2.0@sha256:267cda98b29406502c9b73e993f7a0e17cbb718c077c834e72bbf60be8af52ff AS native-micro
+ARG BUILD_COMMIT
+ARG BUILD_SOURCE_SHA256
+LABEL org.opencontainers.image.revision="${BUILD_COMMIT}" \
+      gg.grounds.source-tree-sha256="${BUILD_SOURCE_SHA256}" \
+      gg.grounds.runtime="native-micro"
+WORKDIR /deployments
+COPY --from=build --chown=1001:0 /artifacts/ /deployments/
+USER 1001:0
+EXPOSE 9000
+ENTRYPOINT ["/deployments/application", "-Xmx192m"]
+
+FROM gcr.io/distroless/cc-debian13:nonroot@sha256:08476c244888bfb425bae1ae4dd7c17f093e972aab8426883d97f3c6f280f7c1 AS native-distroless
+ARG BUILD_COMMIT
+ARG BUILD_SOURCE_SHA256
+LABEL org.opencontainers.image.revision="${BUILD_COMMIT}" \
+      gg.grounds.source-tree-sha256="${BUILD_SOURCE_SHA256}" \
+      gg.grounds.runtime="native-distroless"
+WORKDIR /deployments
+COPY --from=build --chown=65532:65532 /artifacts/ /deployments/
+USER 65532:65532
+EXPOSE 9000
+ENTRYPOINT ["/deployments/application", "-Xmx192m"]
